@@ -20,6 +20,20 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Signage caching + polling (Vercel)
+
+The signage page polls `/api/circle/posts` every 60 seconds, but the API route is configured to be **CDN-cached on Vercel** to avoid multiplying Circle upstream calls when multiple screens are open.
+
+- API route: `app/api/circle/posts/route.ts`
+- Cache header: `Cache-Control: s-maxage=60, stale-while-revalidate=300`
+- Daily filtering timezone: `Europe/London`
+
+### What to verify on Vercel
+
+- **Response header**: In Vercel Function logs / your browser devtools, confirm `/api/circle/posts` includes the Cache-Control header above.
+- **Cache behavior**: With multiple clients hitting `/api/circle/posts` within 60s, Vercel should serve most responses from cache; Circle should not be hit per viewer.
+- **Daily snapshot**: Refreshing the page should render quickly from localStorage if a snapshot exists for today (keyed by `staypost:snapshot:YYYY-MM-DD`).
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
