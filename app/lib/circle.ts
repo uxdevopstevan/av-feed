@@ -82,6 +82,11 @@ function looksLikeUrl(v: unknown): v is string {
   return typeof v === "string" && /^https?:\/\//i.test(v);
 }
 
+function looksLikeVideoUrl(v: unknown): v is string {
+  if (!looksLikeUrl(v)) return false;
+  return /\.(mp4|mov|webm|m4v)(?:\?|#|$)/i.test(v);
+}
+
 function extractFirstImageUrlFromAttachments(attachments: unknown): string | undefined {
   if (!Array.isArray(attachments)) return undefined;
   for (const a of attachments) {
@@ -96,6 +101,26 @@ function extractFirstImageUrlFromAttachments(attachments: unknown): string | und
       ];
       for (const c of candidates) {
         if (looksLikeUrl(c)) return c;
+      }
+    }
+  }
+  return undefined;
+}
+
+function extractFirstVideoUrlFromAttachments(attachments: unknown): string | undefined {
+  if (!Array.isArray(attachments)) return undefined;
+  for (const a of attachments) {
+    if (a && typeof a === "object") {
+      const anyA = a as Record<string, unknown>;
+      const candidates = [
+        anyA.url,
+        anyA.video_url,
+        anyA.file_url,
+        anyA.download_url,
+        anyA.original_url,
+      ];
+      for (const c of candidates) {
+        if (looksLikeVideoUrl(c)) return c;
       }
     }
   }
@@ -136,6 +161,40 @@ function extractImageUrlsFromHtml(html: string): string[] {
     if (looksLikeUrl(url)) urls.push(url);
   }
   return Array.from(new Set(urls));
+}
+
+function extractVideoUrlsFromHtml(html: string): string[] {
+  const urls: string[] = [];
+  const res = [
+    /<video[^>]+src="([^">]+)"/gi,
+    /<source[^>]+src="([^">]+)"/gi,
+  ];
+
+  for (const re of res) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(html))) {
+      const url = m[1];
+      if (looksLikeVideoUrl(url)) urls.push(url);
+    }
+  }
+
+  return Array.from(new Set(urls));
+}
+
+function extractPostVideoUrl(p: CirclePost): string | undefined {
+  const fromTiptap = extractFirstVideoUrlFromAttachments(p.tiptap_body?.attachments);
+  if (fromTiptap) return fromTiptap;
+
+  const fromRoot = extractFirstVideoUrlFromAttachments(p.attachments);
+  if (fromRoot) return fromRoot;
+
+  const bodyHtml = (p.body?.body ?? "").trim();
+  if (bodyHtml) {
+    const urls = extractVideoUrlsFromHtml(bodyHtml);
+    if (urls[0]) return urls[0];
+  }
+
+  return undefined;
 }
 
 function getZonedParts(date: Date, timeZone: string) {
@@ -223,7 +282,7 @@ async function circleFetchJson<T>(path: string, init?: RequestInit): Promise<T> 
 }
 
 async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: number) {
-  const out: Array<{ post: CirclePost; imageUrl?: string }> = [];
+  const out: Array<{ post: CirclePost; imageUrl?: string; videoUrl?: string }> = [];
   let page = 1;
   let shouldContinue = true;
 
@@ -240,7 +299,8 @@ async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: nu
       }
       if (!isWithinWindow(ts, startUtcMs, endUtcMs)) continue;
       const imageUrl = extractPostImageUrl(p);
-      out.push({ post: p, imageUrl });
+      const videoUrl = extractPostVideoUrl(p);
+      out.push({ post: p, imageUrl, videoUrl });
       if (out.length >= MAX_POSTS_PER_DAY) break;
     }
 
@@ -295,6 +355,7 @@ async function fetchTodayCommentsByPostId(
         text: stripHtmlToText(bodyHtml),
         createdAt: c.created_at,
         imageUrls: bodyHtml ? extractImageUrlsFromHtml(bodyHtml) : [],
+        videoUrls: bodyHtml ? extractVideoUrlsFromHtml(bodyHtml) : [],
       };
 
       const arr = byPostId.get(postId) ?? [];
@@ -311,11 +372,20 @@ async function fetchTodayCommentsByPostId(
 }
 
 function buildSignature(input: {
-  posts: Array<{ id: number; updatedAt?: string; commentsCount?: number; imageUrl?: string | null }>;
+  posts: Array<{
+    id: number;
+    updatedAt?: string;
+    commentsCount?: number;
+    imageUrl?: string | null;
+    videoUrl?: string | null;
+  }>;
   commentsByPostId: Map<number, LivePostComment[]>;
 }): string {
   const postPart = input.posts
-    .map((p) => `${p.id}:${p.updatedAt ?? ""}:${p.commentsCount ?? ""}:${p.imageUrl ?? ""}`)
+    .map(
+      (p) =>
+        `${p.id}:${p.updatedAt ?? ""}:${p.commentsCount ?? ""}:${p.imageUrl ?? ""}:${p.videoUrl ?? ""}`,
+    )
     .join("|");
 
   const commentPart = Array.from(input.commentsByPostId.entries())
@@ -324,7 +394,10 @@ function buildSignature(input: {
       const c = comments
         .slice()
         .sort((x, y) => (y.createdAt ?? "").localeCompare(x.createdAt ?? ""))
-        .map((cc) => `${cc.id}:${cc.createdAt ?? ""}:${(cc.imageUrls ?? []).join(",")}`)
+        .map(
+          (cc) =>
+            `${cc.id}:${cc.createdAt ?? ""}:${(cc.imageUrls ?? []).join(",")}:${(cc.videoUrls ?? []).join(",")}`,
+        )
         .join(",");
       return `${postId}=[${c}]`;
     })
@@ -337,8 +410,8 @@ export async function fetchTodaySignageSnapshot(spaceId: number): Promise<Signag
   const { dayKey, startUtcMs, endUtcMs } = londonDayWindow();
   const nowIso = new Date().toISOString();
 
-  const postsWithMaybeImages = await fetchTodayPosts(spaceId, startUtcMs, endUtcMs);
-  const postIds = new Set(postsWithMaybeImages.map((p) => p.post.id));
+  const postsWithMaybeMedia = await fetchTodayPosts(spaceId, startUtcMs, endUtcMs);
+  const postIds = new Set(postsWithMaybeMedia.map((p) => p.post.id));
   const commentsByPostId = await fetchTodayCommentsByPostId(
     spaceId,
     postIds,
@@ -355,11 +428,21 @@ export async function fetchTodaySignageSnapshot(spaceId: number): Promise<Signag
     return undefined;
   };
 
-  const posts: SignageSnapshot["posts"] = postsWithMaybeImages.map(({ post, imageUrl }) => ({
+  const pickFallbackVideoUrlFromComments = (postId: number): string | undefined => {
+    const comments = commentsByPostId.get(postId) ?? [];
+    for (const c of comments) {
+      const url = c.videoUrls?.[0];
+      if (url) return url;
+    }
+    return undefined;
+  };
+
+  const posts: SignageSnapshot["posts"] = postsWithMaybeMedia.map(({ post, imageUrl, videoUrl }) => ({
     id: post.id,
     authorName: post.user_name?.trim() || "Anonymous",
     caption: pickPostCaption(post),
     imageUrl: imageUrl ?? pickFallbackImageUrlFromComments(post.id),
+    videoUrl: videoUrl ?? pickFallbackVideoUrlFromComments(post.id),
     updatedAt: post.updated_at,
     commentsCount: post.comments_count,
   }));

@@ -3,58 +3,201 @@
 import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DisplayItem, LivePostSlide, PromoSlide, SignageSnapshot } from "@/app/lib/types";
+import { useSignageConfig } from "@/app/components/SignageConfigProvider";
+import type { LivePostComment, PromoSlide, SignageSnapshot } from "@/app/lib/types";
 
 const POLL_MS = 60_000;
 const ADVANCE_MS = 10_000;
+const VIDEO_MAX_MS = 10_000;
 const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
 
 const LS_DAY_KEY = "staypost:dayKey";
 const lsSnapshotKey = (dayKey: string) => `staypost:snapshot:${dayKey}`;
 
-const promoSlides: PromoSlide[] = [
-  {
-    kind: "promo",
-    id: "promo-1",
-    title: "Women in Ag Awards 2026",
-    subtitle: "Welcome to the live event!",
-    imageSrc: "/promo1.png",
-  },
-  {
-    kind: "promo",
-    id: "promo-2",
-    title: "Share your moments",
-    subtitle: "Post a photo to appear on the big screen",
-    imageSrc: "/promo2.png",
-  },
-];
+type TextOnlyComment = LivePostComment & { postId: number };
+type Media = { type: "image" | "video"; url: string };
+type MediaSlide = {
+  kind: "commentMedia" | "postMedia";
+  id: string;
+  postId: number;
+  authorName: string;
+  text: string;
+  createdAt?: string;
+  media: Media;
+};
+type MainDisplayItem = PromoSlide | MediaSlide;
 
-function buildQueue(promos: PromoSlide[], posts: LivePostSlide[]): DisplayItem[] {
-  if (posts.length === 0) return promos;
-  const q: DisplayItem[] = [];
-  const max = Math.max(promos.length, posts.length);
-  for (let i = 0; i < max; i += 1) {
-    if (promos[i]) q.push(promos[i]);
-    if (posts[i]) q.push(posts[i]);
+function buildMainQueue(promos: PromoSlide[], content: MediaSlide[]): MainDisplayItem[] {
+  if (content.length === 0) return promos;
+
+  // Target ~25% promos by inserting 1 promo after every 3 comment-image slides.
+  const promoEvery = 3;
+  const out: MainDisplayItem[] = [];
+  let promoIdx = 0;
+
+  for (let i = 0; i < content.length; i += 1) {
+    out.push(content[i]);
+    if (promos.length > 0 && (i + 1) % promoEvery === 0) {
+      out.push(promos[promoIdx % promos.length] as MainDisplayItem);
+      promoIdx += 1;
+    }
   }
-  return q.length ? q : promos;
+
+  return out.length ? out : promos;
 }
 
-function formatPromoTickerText(item: PromoSlide): string {
-  return item.subtitle
-    ? `${item.title} — ${item.subtitle}`
-    : `Welcome to the ${item.title}!`;
+function itemKey(item: MainDisplayItem): string {
+  return `${item.kind}:${"id" in item ? String(item.id) : ""}`;
+}
+
+function toSortableIso(v: string | undefined): string {
+  return typeof v === "string" && v ? v : "";
 }
 
 export default function SignageClient() {
-  const [posts, setPosts] = useState<LivePostSlide[]>([]);
-  const [activeIdx, setActiveIdx] = useState(0);
+  const { config } = useSignageConfig();
+  const [snapshot, setSnapshot] = useState<SignageSnapshot | null>(null);
+  const [activeMainIdx, setActiveMainIdx] = useState(0);
+  const [activeTextIdx, setActiveTextIdx] = useState(0);
   const signatureRef = useRef<string | null>(null);
-  const advanceTimer = useRef<number | null>(null);
+  const mainAdvanceTimer = useRef<number | null>(null);
+  const textAdvanceTimer = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const contentIdsRef = useRef<string[]>([]);
+  const contentByIdRef = useRef(new Map<string, MediaSlide>());
+  const lastActiveKeyRef = useRef<string | null>(null);
+  const [contentIds, setContentIds] = useState<string[]>([]);
 
-  const queue = useMemo(() => buildQueue(promoSlides, posts), [posts]);
-  const active = queue.length ? queue[activeIdx % queue.length] : promoSlides[0];
+  const promoSlides = useMemo<PromoSlide[]>(() => {
+    const urls = config.promoImageUrls ?? [];
+    return urls.map((src, idx) => ({
+      kind: "promo",
+      id: `promo-${idx}`,
+      title: "",
+      imageSrc: src,
+    }));
+  }, [config.promoImageUrls]);
+
+  const { mediaSlidesLatest, textOnlyComments } = useMemo(() => {
+    const commentsByPostId = snapshot?.commentsByPostId ?? {};
+    const media: MediaSlide[] = [];
+    const textOnly: TextOnlyComment[] = [];
+
+    for (const [postIdStr, comments] of Object.entries(commentsByPostId)) {
+      const postId = Number(postIdStr);
+      if (!Number.isFinite(postId) || !Array.isArray(comments)) continue;
+
+      for (const c of comments) {
+        const img = c.imageUrls?.[0];
+        const vid = c.videoUrls?.[0];
+        if (img) {
+          media.push({
+            kind: "commentMedia",
+            id: `comment-${c.id}-img`,
+            postId,
+            authorName: c.authorName,
+            text: c.text,
+            createdAt: c.createdAt,
+            media: { type: "image", url: img },
+          });
+        }
+        if (vid) {
+          media.push({
+            kind: "commentMedia",
+            id: `comment-${c.id}-vid`,
+            postId,
+            authorName: c.authorName,
+            text: c.text,
+            createdAt: c.createdAt,
+            media: { type: "video", url: vid },
+          });
+        }
+
+        if (!img && !vid) {
+          textOnly.push({ ...c, postId });
+        }
+      }
+    }
+
+    for (const p of snapshot?.posts ?? []) {
+      if (p.imageUrl) {
+        media.push({
+          kind: "postMedia",
+          id: `post-${p.id}-img`,
+          postId: p.id,
+          authorName: p.authorName,
+          text: p.caption,
+          createdAt: p.updatedAt,
+          media: { type: "image", url: String(p.imageUrl) },
+        });
+      }
+      if (p.videoUrl) {
+        media.push({
+          kind: "postMedia",
+          id: `post-${p.id}-vid`,
+          postId: p.id,
+          authorName: p.authorName,
+          text: p.caption,
+          createdAt: p.updatedAt,
+          media: { type: "video", url: String(p.videoUrl) },
+        });
+      }
+    }
+
+    const byCreatedDesc = <T extends { createdAt?: string }>(a: T, b: T) =>
+      toSortableIso(b.createdAt).localeCompare(toSortableIso(a.createdAt));
+    media.sort(byCreatedDesc);
+    textOnly.sort(byCreatedDesc);
+
+    return { mediaSlidesLatest: media, textOnlyComments: textOnly };
+  }, [snapshot]);
+
+  useEffect(() => {
+    const latest = mediaSlidesLatest;
+    const latestIds = new Set(latest.map((s) => s.id));
+    const byId = contentByIdRef.current;
+
+    // Update/insert all latest slides.
+    for (const s of latest) byId.set(s.id, s);
+
+    // Remove slides no longer present (keep IDs in queue; they'll be skipped).
+    for (const id of Array.from(byId.keys())) {
+      if (!latestIds.has(id)) byId.delete(id);
+    }
+
+    const existing = new Set(contentIdsRef.current);
+    const newOnes = latest.filter((s) => !existing.has(s.id));
+    newOnes.sort((a, b) => toSortableIso(b.createdAt).localeCompare(toSortableIso(a.createdAt)));
+
+    if (newOnes.length) {
+      contentIdsRef.current = [...contentIdsRef.current, ...newOnes.map((s) => s.id)];
+      setContentIds(contentIdsRef.current);
+      return;
+    }
+
+    // Still trigger a re-render if the queue is empty but we now have slides.
+    if (contentIdsRef.current.length === 0 && latest.length > 0) {
+      contentIdsRef.current = latest.map((s) => s.id);
+      setContentIds(contentIdsRef.current);
+      return;
+    }
+
+    // Force a re-render so updated slide text/media is reflected.
+    setContentIds((prev) => (prev.length === contentIdsRef.current.length ? [...contentIdsRef.current] : prev));
+  }, [mediaSlidesLatest]);
+
+  const contentSlides = useMemo(
+    () => contentIds.map((id) => contentByIdRef.current.get(id)).filter(Boolean) as MediaSlide[],
+    [contentIds],
+  );
+
+  const mainQueue = useMemo(() => buildMainQueue(promoSlides, contentSlides), [promoSlides, contentSlides]);
+  const activeMain = mainQueue.length
+    ? mainQueue[activeMainIdx % mainQueue.length]
+    : promoSlides[0] ?? { kind: "promo", id: "promo-fallback", title: "" };
+  const activeText = textOnlyComments.length
+    ? textOnlyComments[activeTextIdx % textOnlyComments.length]
+    : null;
 
   useEffect(() => {
     const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -76,19 +219,6 @@ export default function SignageClient() {
       }).format(d);
     }
 
-    function snapshotToSlides(s: SignageSnapshot): LivePostSlide[] {
-      return (s.posts ?? []).map((p) => ({
-        kind: "post",
-        id: p.id,
-        authorName: p.authorName,
-        caption: p.caption,
-        imageUrl: p.imageUrl,
-        updatedAt: p.updatedAt,
-        commentsCount: p.commentsCount,
-        comments: (s.commentsByPostId?.[String(p.id)] ?? []).slice(0, 25),
-      }));
-    }
-
     function loadCachedSnapshot(): void {
       try {
         const todayKey = londonDayKey();
@@ -102,7 +232,7 @@ export default function SignageClient() {
         if (Date.now() - parsed.cachedAt > SNAPSHOT_TTL_MS) return;
 
         signatureRef.current = parsed.snapshot.signature;
-        setPosts(snapshotToSlides(parsed.snapshot));
+        setSnapshot(parsed.snapshot);
       } catch {
         // ignore
       }
@@ -137,10 +267,10 @@ export default function SignageClient() {
         if (signatureRef.current && json.signature === signatureRef.current) return;
 
         signatureRef.current = json.signature;
-        setPosts(snapshotToSlides(json));
+        setSnapshot(json);
         saveCachedSnapshot(json);
       } catch {
-        if (!cancelled) setPosts([]);
+        if (!cancelled) setSnapshot(null);
       }
     }
 
@@ -173,14 +303,42 @@ export default function SignageClient() {
   }
 
   useEffect(() => {
-    if (advanceTimer.current) window.clearInterval(advanceTimer.current);
-    advanceTimer.current = window.setInterval(() => {
-      setActiveIdx((i) => (queue.length ? (i + 1) % queue.length : 0));
+    if (mainAdvanceTimer.current) window.clearTimeout(mainAdvanceTimer.current);
+
+    const ms =
+      "kind" in activeMain && activeMain.kind !== "promo" && (activeMain as MediaSlide).media.type === "video"
+        ? VIDEO_MAX_MS
+        : ADVANCE_MS;
+
+    mainAdvanceTimer.current = window.setTimeout(() => {
+      setActiveMainIdx((i) => (mainQueue.length ? (i + 1) % mainQueue.length : 0));
+    }, ms);
+    return () => {
+      if (mainAdvanceTimer.current) window.clearTimeout(mainAdvanceTimer.current);
+    };
+  }, [mainQueue.length, activeMainIdx, activeMain]);
+
+  useEffect(() => {
+    lastActiveKeyRef.current = itemKey(activeMain);
+  }, [activeMain]);
+
+  useEffect(() => {
+    const k = lastActiveKeyRef.current;
+    if (!k) return;
+    const idx = mainQueue.findIndex((it) => itemKey(it) === k);
+    if (idx >= 0 && idx !== activeMainIdx) setActiveMainIdx(idx);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainQueue]);
+
+  useEffect(() => {
+    if (textAdvanceTimer.current) window.clearInterval(textAdvanceTimer.current);
+    textAdvanceTimer.current = window.setInterval(() => {
+      setActiveTextIdx((i) => (textOnlyComments.length ? (i + 1) % textOnlyComments.length : 0));
     }, ADVANCE_MS);
     return () => {
-      if (advanceTimer.current) window.clearInterval(advanceTimer.current);
+      if (textAdvanceTimer.current) window.clearInterval(textAdvanceTimer.current);
     };
-  }, [queue.length]);
+  }, [textOnlyComments.length]);
 
   return (
     <>
@@ -198,28 +356,24 @@ export default function SignageClient() {
 
         <AnimatePresence mode="wait">
           <motion.div
-            key={`${active.kind}-${"id" in active ? active.id : activeIdx}`}
+            key={`${activeMain.kind}-${"id" in activeMain ? activeMain.id : activeMainIdx}`}
             className="absolute inset-0"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.9, ease: "easeInOut" }}
           >
-            {"kind" in active && active.kind === "promo" ? (
-              <PromoMain item={active} />
+            {"kind" in activeMain && activeMain.kind === "promo" ? (
+              <PromoMain item={activeMain} />
             ) : (
-              <PostMain item={active as LivePostSlide} />
+              <MediaMain item={activeMain as MediaSlide} />
             )}
           </motion.div>
         </AnimatePresence>
       </div>
 
       <div className="h-1/4 bg-[#1A1A1A] p-8 overflow-hidden">
-        {"kind" in active && active.kind === "promo" ? (
-          <PromoTicker item={active} />
-        ) : (
-          <PostTicker item={active as LivePostSlide} />
-        )}
+        <TextCommentTicker item={activeText} />
       </div>
     </>
   );
@@ -241,7 +395,7 @@ function PromoMain({ item }: { item: PromoSlide }) {
           </div>
           <img
             src={item.imageSrc}
-            alt={item.title}
+            alt=""
             onError={() => setImgFailed(true)}
             className="absolute inset-0 h-full w-full object-contain"
           />
@@ -249,17 +403,6 @@ function PromoMain({ item }: { item: PromoSlide }) {
       ) : (
         <div className="absolute inset-0 bg-gradient-to-br from-[#701a56] via-black to-[#1A1A1A]" />
       )}
-
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="text-center px-10">
-          <div className="text-6xl font-extrabold tracking-tight">{item.title}</div>
-          {item.subtitle ? (
-            <div className="mt-6 text-4xl font-bold text-white/90">
-              {item.subtitle}
-            </div>
-          ) : null}
-        </div>
-      </div>
     </div>
   );
 }
@@ -308,86 +451,76 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
   );
 }
 
-function PostMain({ item }: { item: LivePostSlide }) {
-  if (!item.imageUrl) {
+function MediaMain({ item }: { item: MediaSlide }) {
+  return (
+    <div className="absolute inset-0">
+      {item.media.type === "image" ? (
+        <>
+          <div className="absolute inset-0 scale-110 blur-2xl opacity-65">
+            <Image
+              src={item.media.url}
+              alt="Live media background"
+              fill
+              unoptimized
+              className="object-cover"
+            />
+          </div>
+          <div className="absolute inset-0">
+            <Image
+              src={item.media.url}
+              alt="Live media"
+              fill
+              unoptimized
+              className="object-contain"
+              priority
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="absolute inset-0 bg-gradient-to-br from-black via-black to-[#1A1A1A]" />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <video
+              src={item.media.url}
+              autoPlay
+              muted
+              loop
+              playsInline
+              className="h-full w-full object-contain"
+            />
+          </div>
+        </>
+      )}
+
+      <div className="absolute inset-0 bg-black/15" />
+
+      <div className="absolute left-10 right-10 bottom-10">
+        <div className="inline-block max-w-[70%] rounded-3xl bg-black/55 border border-white/15 px-8 py-6 backdrop-blur-md">
+          <div className="text-4xl font-extrabold">{item.authorName}</div>
+          <div className="mt-3 text-3xl font-semibold text-white/90 line-clamp-4">
+            {item.text || " "}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TextCommentTicker({ item }: { item: TextOnlyComment | null }) {
+  if (!item) {
     return (
-      <div className="absolute inset-0">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#701a56] via-black to-[#1A1A1A]" />
-        <div className="absolute inset-0 bg-black/10" />
+      <div className="h-full flex items-center">
+        <div className="text-4xl font-semibold text-white/60">No comments yet</div>
       </div>
     );
   }
 
   return (
-    <div className="absolute inset-0">
-      <div className="absolute inset-0 scale-110 blur-2xl opacity-65">
-        <Image
-          src={item.imageUrl}
-          alt="Live post image background"
-          fill
-          unoptimized
-          className="object-cover"
-        />
-      </div>
-      <div className="absolute inset-0">
-        <Image
-          src={item.imageUrl}
-          alt="Live post image"
-          fill
-          unoptimized
-          className="object-contain"
-          priority
-        />
-      </div>
-      <div className="absolute inset-0 bg-black/10" />
-    </div>
-  );
-}
-
-function PromoTicker({ item }: { item: PromoSlide }) {
-  return (
     <div className="h-full flex items-center">
-      <div className="text-5xl font-extrabold tracking-tight">
-        {formatPromoTickerText(item)}
-      </div>
-    </div>
-  );
-}
-
-function PostTicker({ item }: { item: LivePostSlide }) {
-  return (
-    <div className="h-full w-full flex gap-10">
-      <div className="w-1/2 overflow-hidden">
-        <div className="text-4xl font-extrabold">{item.authorName}</div>
-        <div className="mt-4 text-3xl font-semibold text-white/90 line-clamp-3">
-          {item.caption || " "}
-        </div>
-      </div>
-      <div className="w-1/2 overflow-hidden">
-        <div className="text-3xl font-bold text-white/80">Recent comments</div>
-        <div className="mt-4 space-y-4">
-          {item.comments.length ? (
-            item.comments.slice(0, 3).map((c) => (
-              <div key={c.id} className="text-3xl flex items-start gap-4">
-                {c.imageUrls?.[0] ? (
-                  <img
-                    src={c.imageUrls[0]}
-                    alt=""
-                    className="h-16 w-16 rounded-xl object-cover border border-white/15 bg-black/25 shrink-0"
-                  />
-                ) : null}
-                <div className="min-w-0">
-                  <span className="font-extrabold">{c.authorName}: </span>
-                  <span className="font-semibold text-white/90">{c.text}</span>
-                </div>
-              </div>
-            ))
-          ) : (
-            <div className="text-3xl font-semibold text-white/60">
-              No comments yet
-            </div>
-          )}
-        </div>
+      <div className="min-w-0">
+        <div className="text-3xl font-bold text-white/80">Latest comments</div>
+        <div className="mt-4 text-4xl font-extrabold">{item.authorName}</div>
+        <div className="mt-3 text-3xl font-semibold text-white/90 line-clamp-3">{item.text}</div>
       </div>
     </div>
   );

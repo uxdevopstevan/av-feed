@@ -17,15 +17,18 @@ export default function SidebarImage({
   height,
 }: Props) {
   const [failed, setFailed] = useState(false);
+  const isMissing = !src?.trim();
 
-  if (failed) {
+  if (failed || isMissing) {
     return (
       <div
         aria-label={alt}
         className="flex items-center justify-center rounded-xl bg-white/15 text-white/90"
         style={{ width, height }}
       >
-        <div className="text-2xl font-bold tracking-tight">Asset missing</div>
+        <div className="text-2xl font-bold tracking-tight">
+          {isMissing ? "Not configured" : "Asset missing"}
+        </div>
       </div>
     );
   }
