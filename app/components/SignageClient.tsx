@@ -15,7 +15,9 @@ const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
 const LS_DAY_KEY = "staypost:dayKey";
 const lsSnapshotKey = (dayKey: string) => `staypost:snapshot:${dayKey}`;
 
-type Media = { type: "image" | "video"; url: string };
+type Media =
+  | { type: "image"; url: string }
+  | { type: "video"; url: string; posterUrl?: string | null };
 type PostSlide = {
   kind: "post";
   id: string;
@@ -87,18 +89,23 @@ export default function SignageClient() {
   const { postSlidesLatest, commentsByPostId } = useMemo(() => {
     const posts: PostSlide[] = [];
     for (const p of snapshot?.posts ?? []) {
+      const caption = String(p.caption ?? "");
       const media: Media | undefined = p.videoUrl
-        ? { type: "video", url: String(p.videoUrl) }
+        ? { type: "video", url: String(p.videoUrl), posterUrl: p.videoPosterUrl ?? null }
         : p.imageUrl
           ? { type: "image", url: String(p.imageUrl) }
           : undefined;
+
+      // Skip completely empty posts so we don't render a "blank" slide.
+      if (!media && caption.trim().length === 0) continue;
+
       posts.push({
         kind: "post",
         id: `post-${p.id}`,
         postId: p.id,
         authorName: p.authorName,
         authorAvatarUrl: p.authorAvatarUrl ?? null,
-        caption: p.caption,
+        caption,
         createdAt: p.updatedAt,
         media,
       });
@@ -396,8 +403,8 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
   return isFullscreen ? (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      width="28"
-      height="28"
+      width="14"
+      height="14"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -414,8 +421,8 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
   ) : (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      width="28"
-      height="28"
+      width="14"
+      height="14"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
@@ -445,7 +452,7 @@ function PostMain({ item }: { item: PostSlide }) {
             <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={72} />
             <div className="text-3xl font-extrabold leading-tight text-white/95">{item.authorName}</div>
           </div>
-          <div className="mt-8 text-[3.25rem] leading-tight font-extrabold text-white">
+          <div className="mt-8 text-[3.25rem] leading-tight font-extrabold text-white line-clamp-6">
             {item.caption || " "}
           </div>
         </div>
@@ -453,13 +460,15 @@ function PostMain({ item }: { item: PostSlide }) {
     );
   }
 
+  const media = item.media;
+
   return (
     <div className="absolute inset-0">
-      {item.media.type === "image" ? (
+      {media.type === "image" ? (
         <>
           <div className="absolute inset-0 scale-110 blur-2xl opacity-65">
             <Image
-              src={item.media.url}
+              src={media.url}
               alt="Live media background"
               fill
               unoptimized
@@ -468,7 +477,7 @@ function PostMain({ item }: { item: PostSlide }) {
           </div>
           <div className="absolute inset-0">
             <Image
-              src={item.media.url}
+              src={media.url}
               alt="Live media"
               fill
               unoptimized
@@ -477,13 +486,24 @@ function PostMain({ item }: { item: PostSlide }) {
             />
           </div>
         </>
-      ) : (
+      ) : media.type === "video" ? (
         <>
           <div className="absolute inset-0 bg-gradient-to-br from-black via-black to-[#1A1A1A]" />
+          {media.posterUrl ? (
+            <div className="absolute inset-0 scale-110 blur-2xl opacity-60">
+              <img src={media.posterUrl} alt="" className="h-full w-full object-cover" />
+            </div>
+          ) : null}
           <div className="absolute inset-0 flex items-center justify-center">
-            <HlsVideo src={item.media.url} className="h-full w-full object-contain" />
+            <HlsVideo
+              src={media.url}
+              className="h-full w-full object-contain"
+              poster={media.posterUrl ?? null}
+            />
           </div>
         </>
+      ) : (
+        <div className="absolute inset-0 bg-gradient-to-br from-black via-black to-[#1A1A1A]" />
       )}
 
       <div className="absolute inset-0 bg-black/15" />
@@ -518,7 +538,15 @@ function preferNativeHlsPlayback(): boolean {
   return isSafari;
 }
 
-function HlsVideo({ src, className }: { src: string; className?: string }) {
+function HlsVideo({
+  src,
+  className,
+  poster,
+}: {
+  src: string;
+  className?: string;
+  poster?: string | null;
+}) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
@@ -581,6 +609,7 @@ function HlsVideo({ src, className }: { src: string; className?: string }) {
   return (
     <video
       ref={ref}
+      poster={poster ?? undefined}
       autoPlay
       muted
       loop

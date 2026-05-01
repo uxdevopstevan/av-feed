@@ -51,6 +51,7 @@ export type SignageSnapshot = {
     caption: string;
     imageUrl?: string | null;
     videoUrl?: string | null;
+    videoPosterUrl?: string | null;
     updatedAt?: string;
     commentsCount?: number;
   }>;

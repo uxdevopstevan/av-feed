@@ -124,10 +124,11 @@ function getRecord(obj: unknown, key: string): Record<string, unknown> | undefin
 
 function extractPostMediaFromInlineAttachments(
   inline: unknown,
-): { imageUrl?: string; videoUrl?: string } {
+): { imageUrl?: string; videoUrl?: string; videoPosterUrl?: string } {
   if (!Array.isArray(inline)) return {};
   let imageUrl: string | undefined;
   let videoUrl: string | undefined;
+  let videoPosterUrl: string | undefined;
 
   for (const a of inline) {
     if (!a || typeof a !== "object") continue;
@@ -143,6 +144,15 @@ function extractPostMediaFromInlineAttachments(
         (original && looksLikeUrl(original) ? original : undefined) ??
         (url && looksLikeUrl(url) ? url : undefined);
       if (pick) videoUrl = pick;
+
+      if (!videoPosterUrl) {
+        const poster =
+          getString(anyA, "thumbnail_url") ??
+          getString(anyA, "poster_url") ??
+          getString(anyA, "thumbnail") ??
+          getString(anyA, "poster");
+        if (poster && looksLikeUrl(poster)) videoPosterUrl = poster;
+      }
     }
 
     if (!imageUrl && contentType.startsWith("image/")) {
@@ -163,7 +173,7 @@ function extractPostMediaFromInlineAttachments(
     }
   }
 
-  return { imageUrl, videoUrl };
+  return { imageUrl, videoUrl, videoPosterUrl };
 }
 
 function extractFirstImageUrlFromAttachments(attachments: unknown): string | undefined {
@@ -279,6 +289,12 @@ function extractPostVideoUrl(p: CirclePost): string | undefined {
     if (urls[0]) return urls[0];
   }
 
+  return undefined;
+}
+
+function extractPostVideoPosterUrl(p: CirclePost): string | undefined {
+  const inline = extractPostMediaFromInlineAttachments(p.tiptap_body?.inline_attachments);
+  if (inline.videoPosterUrl) return inline.videoPosterUrl;
   return undefined;
 }
 
@@ -398,7 +414,7 @@ async function circleFetchJson<T>(path: string, init?: RequestInit): Promise<T> 
 }
 
 async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: number, maxPosts: number) {
-  const out: Array<{ post: CirclePost; imageUrl?: string; videoUrl?: string }> = [];
+  const out: Array<{ post: CirclePost; imageUrl?: string; videoUrl?: string; videoPosterUrl?: string }> = [];
   let page = 1;
   let shouldContinue = true;
 
@@ -417,7 +433,8 @@ async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: nu
       if (!isWithinWindow(ts, startUtcMs, endUtcMs)) continue;
       const imageUrl = extractPostImageUrl(p);
       const videoUrl = extractPostVideoUrl(p);
-      out.push({ post: p, imageUrl, videoUrl });
+      const videoPosterUrl = videoUrl ? extractPostVideoPosterUrl(p) : undefined;
+      out.push({ post: p, imageUrl, videoUrl, videoPosterUrl });
       if (out.length >= limit) break;
     }
 
@@ -544,13 +561,14 @@ export async function fetchTodaySignageSnapshot(
     maxTotalComments: opts.maxTotalComments,
   });
 
-  const posts: SignageSnapshot["posts"] = postsWithMaybeMedia.map(({ post, imageUrl, videoUrl }) => ({
+  const posts: SignageSnapshot["posts"] = postsWithMaybeMedia.map(({ post, imageUrl, videoUrl, videoPosterUrl }) => ({
     id: post.id,
     authorName: post.user_name?.trim() || "Anonymous",
     authorAvatarUrl: post.user_avatar_url ?? null,
     caption: pickPostCaption(post),
     imageUrl: imageUrl ?? null,
     videoUrl: videoUrl ?? null,
+    videoPosterUrl: videoPosterUrl ?? null,
     updatedAt: post.updated_at,
     commentsCount: post.comments_count,
   }));
