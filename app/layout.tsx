@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Staypost Signage",
+  title: "Circle Signage",
   description: "Event digital signage display",
 };
 

@@ -6,6 +6,11 @@ import { useSignageConfig } from "@/app/components/SignageConfigProvider";
 import SidebarImage from "@/app/components/SidebarImage";
 import SignageClient from "@/app/components/SignageClient";
 
+function looksLikeVideoUrl(url: string): boolean {
+  const u = url.toLowerCase();
+  return u.includes(".m3u8") || u.includes("/hls/") || /\.(mp4|webm|mov|m4v)(?:\?|#|$)/i.test(u);
+}
+
 export default function SignageShell() {
   const { config } = useSignageConfig();
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -30,6 +35,30 @@ export default function SignageShell() {
         className="w-1/4 h-full flex flex-col items-center justify-between p-10 relative"
         style={{ backgroundColor: config.themeColor }}
       >
+        {config.sidebarBackgroundMediaUrl ? (
+          <div className="absolute inset-0 z-0" aria-hidden="true">
+            {looksLikeVideoUrl(config.sidebarBackgroundMediaUrl) ? (
+              <video
+                src={config.sidebarBackgroundMediaUrl}
+                autoPlay
+                muted
+                loop
+                playsInline
+                preload="auto"
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={config.sidebarBackgroundMediaUrl}
+                alt=""
+                className="absolute inset-0 h-full w-full object-cover"
+              />
+            )}
+            <div className="absolute inset-0 bg-black/20" />
+          </div>
+        ) : null}
+
         {!isFullscreen ? (
           <Link
             href="/config"
@@ -40,15 +69,20 @@ export default function SignageShell() {
           </Link>
         ) : null}
 
-        <div className="w-full flex items-center justify-center pt-2">
+        <div className="w-full flex items-center justify-center pt-2 relative z-10">
           <SidebarImage src={config.logoUrl} alt="Event logo" width={360} height={180} priority />
         </div>
 
-        <div className="w-full flex items-center justify-center">
+        <div className="w-full flex items-center justify-center relative z-10">
           <SidebarImage src={config.qrUrl} alt="QR code" width={220} height={220} />
         </div>
 
-        <div className="text-4xl font-bold text-center px-2 pb-2">Scan to join the live feed!</div>
+        <div
+          className="text-4xl font-bold text-center px-2 pb-2 relative z-10"
+          style={{ color: config.sidebarTextColor }}
+        >
+          {config.sidebarJoinHeadline}
+        </div>
       </aside>
 
       <section className="w-3/4 h-full flex flex-col">

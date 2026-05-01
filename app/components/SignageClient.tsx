@@ -12,8 +12,8 @@ const ADVANCE_MS = 10_000;
 const VIDEO_MAX_MS = 10_000;
 const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
 
-const LS_DAY_KEY = "staypost:dayKey";
-const lsSnapshotKey = (dayKey: string) => `staypost:snapshot:${dayKey}`;
+const LS_DAY_KEY = "circle:dayKey";
+const lsSnapshotKey = (dayKey: string) => `circle:snapshot:${dayKey}`;
 
 type Media =
   | { type: "image"; url: string }
@@ -30,7 +30,6 @@ type PostSlide = {
 };
 type MainDisplayItem = PromoSlide | PostSlide;
 
-const PROMO_CTA = "Join Staypost using the QR code on the left. Post your photos or comment on others.";
 const EMPTY_POST_CTA = "Be the first to comment on this post";
 
 function buildMainQueue(promos: PromoSlide[], content: PostSlide[]): MainDisplayItem[] {
@@ -327,6 +326,11 @@ export default function SignageClient() {
   return (
     <>
       <div className="h-3/4 relative overflow-hidden">
+        <BackgroundMedia
+          url={config.backgroundMediaUrl}
+          visible={"kind" in activeMain && activeMain.kind === "post"}
+        />
+
         {!isFullscreen ? (
           <button
             type="button"
@@ -338,14 +342,14 @@ export default function SignageClient() {
           </button>
         ) : null}
 
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="sync" initial={false}>
           <motion.div
             key={`${activeMain.kind}-${"id" in activeMain ? activeMain.id : activeMainIdx}`}
             className="absolute inset-0"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.9, ease: "easeInOut" }}
+            initial={{ opacity: 1, zIndex: 0 }}
+            animate={{ opacity: 1, zIndex: 0 }}
+            exit={{ opacity: 0, zIndex: 1 }}
+            transition={{ opacity: { duration: 0.9, ease: "easeInOut" }, zIndex: { duration: 0 } }}
           >
             {"kind" in activeMain && activeMain.kind === "promo" ? (
               <PromoMain item={activeMain} />
@@ -356,18 +360,75 @@ export default function SignageClient() {
         </AnimatePresence>
       </div>
 
-      <div className="h-1/4 bg-[#1A1A1A] p-8 overflow-hidden">
+      <div
+        className="h-1/4 p-8 overflow-hidden"
+        style={{ backgroundColor: config.commentAreaBgColor }}
+      >
         {"kind" in activeMain && activeMain.kind === "promo" ? (
-          <PromoTickerMessage message={PROMO_CTA} />
+          <PromoTickerMessage message={config.promoCtaMessage} />
         ) : activePostId && activeComment ? (
           <TextCommentTicker item={activeComment} />
         ) : activePostId ? (
           <PromoTickerMessage message={EMPTY_POST_CTA} />
         ) : (
-          <PromoTickerMessage message={PROMO_CTA} />
+          <PromoTickerMessage message={config.promoCtaMessage} />
         )}
       </div>
     </>
+  );
+}
+
+function looksLikeVideoUrlForBackground(url: string): boolean {
+  const u = url.toLowerCase();
+  return (
+    u.includes(".m3u8") ||
+    u.includes("/hls/") ||
+    /\.(mp4|webm|mov|m4v)(?:\?|#|$)/i.test(u)
+  );
+}
+
+function BackgroundMedia({ url, visible }: { url: string; visible: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const trimmed = (url ?? "").trim();
+  const show = Boolean(trimmed) && !failed;
+  const isVideo = show ? looksLikeVideoUrlForBackground(trimmed) : false;
+
+  if (!show) return null;
+
+  return (
+    <div
+      className={[
+        "absolute inset-0 z-0 transition-opacity duration-500",
+        visible ? "opacity-100" : "opacity-0",
+      ].join(" ")}
+      aria-hidden="true"
+    >
+      {isVideo ? (
+        isLikelyHlsUrl(trimmed) ? (
+          <HlsVideo src={trimmed} className="absolute inset-0 h-full w-full object-cover" />
+        ) : (
+          <video
+            src={trimmed}
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="auto"
+            className="absolute inset-0 h-full w-full object-cover"
+            onError={() => setFailed(true)}
+          />
+        )
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={trimmed}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={() => setFailed(true)}
+        />
+      )}
+      <div className="absolute inset-0 bg-black/20" />
+    </div>
   );
 }
 
@@ -446,15 +507,19 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
 function PostMain({ item }: { item: PostSlide }) {
   if (!item.media) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black via-black to-[#1A1A1A]">
-        <div className="max-w-[80%] text-center">
-          <div className="flex items-center justify-center gap-5">
-            <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={72} />
-            <div className="text-3xl font-extrabold leading-tight text-white/95">{item.authorName}</div>
+      <div className="absolute inset-0 flex items-center justify-center">
+        <div className="w-full h-full p-16 flex items-center justify-center">
+          <div className="w-full max-w-[85%] max-h-full">
+            <div className="rounded-[2.25rem] bg-black/55 border border-white/15 px-14 py-12 backdrop-blur-md text-center">
+            <div className="flex items-center justify-center gap-5">
+              <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={72} />
+              <div className="text-3xl font-extrabold leading-tight text-white/95">{item.authorName}</div>
+            </div>
+              <div className="mt-8 text-[2.5rem] leading-tight font-extrabold text-white line-clamp-6">
+              {item.caption || " "}
+            </div>
           </div>
-          <div className="mt-8 text-[3.25rem] leading-tight font-extrabold text-white line-clamp-6">
-            {item.caption || " "}
-          </div>
+        </div>
         </div>
       </div>
     );
@@ -648,9 +713,11 @@ function TextCommentTicker({ item }: { item: LivePostComment | null }) {
 }
 
 function PromoTickerMessage({ message }: { message: string }) {
+  const trimmed = message.replace(/^\n+|\n+$/g, "");
+  if (!trimmed.trim()) return null;
   return (
-    <div className="h-full flex items-center">
-      <div className="text-4xl font-semibold text-white/75">{message}</div>
+    <div className="h-full flex items-center justify-center text-center">
+      <div className="text-4xl font-semibold text-white/75 whitespace-pre-line">{trimmed}</div>
     </div>
   );
 }

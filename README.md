@@ -1,8 +1,8 @@
-Staypost AV Feed is a Next.js app that renders an event “signage” screen powered by the Circle Admin API:
+Circle AV Feed is a Next.js app that renders an event “signage” screen powered by the Circle Admin API:
 
 - **Main area**: rotates through **posts** (image, video, or text-only).
 - **Bottom bar**: shows **comments for the currently displayed post** (or a CTA when a promo slide is showing).
-- **Config page (`/config`)**: per-device settings stored in localStorage (space selection + fetch limits).
+- **Config page (`/config`)**: per-device settings stored in localStorage (space selection + fetch limits + theming + assets + import/export).
 
 ## Getting Started
 
@@ -91,4 +91,4 @@ The config page also controls how much data we fetch from Circle. These values a
 
 - **Response header**: In Vercel Function logs / your browser devtools, confirm `/api/circle/posts` includes the Cache-Control header above.
 - **Cache behavior**: With multiple clients hitting `/api/circle/posts` within 60s, Vercel should serve most responses from cache; Circle should not be hit per viewer.
-- **Daily snapshot**: Refreshing the page should render quickly from localStorage if a snapshot exists for today (keyed by `staypost:snapshot:YYYY-MM-DD`).
+- **Daily snapshot**: Refreshing the page should render quickly from localStorage if a snapshot exists for today (keyed by `circle:snapshot:YYYY-MM-DD`).

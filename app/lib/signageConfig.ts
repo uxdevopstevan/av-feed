@@ -5,12 +5,18 @@ export type SignageConfig = {
   maxCommentsPerPost: number;
   maxTotalComments: number;
   themeColor: string;
+  commentAreaBgColor: string;
+  sidebarTextColor: string;
+  sidebarBackgroundMediaUrl: string;
+  sidebarJoinHeadline: string;
+  promoCtaMessage: string;
   logoUrl: string;
   qrUrl: string;
   promoImageUrls: string[];
+  backgroundMediaUrl: string;
 };
 
-export const SIGNAGE_CONFIG_LS_KEY = "staypost:config:v1";
+export const SIGNAGE_CONFIG_LS_KEY = "circle:config:v1";
 
 export const DEFAULT_SIGNAGE_CONFIG: SignageConfig = {
   spaceId: null,
@@ -19,9 +25,15 @@ export const DEFAULT_SIGNAGE_CONFIG: SignageConfig = {
   maxCommentsPerPost: 10,
   maxTotalComments: 800,
   themeColor: "#701a56",
+  commentAreaBgColor: "#1A1A1A",
+  sidebarTextColor: "#FFFFFF",
+  sidebarBackgroundMediaUrl: "",
+  sidebarJoinHeadline: "Scan to join the live feed!",
+  promoCtaMessage: "",
   logoUrl: "",
   qrUrl: "",
   promoImageUrls: [],
+  backgroundMediaUrl: "",
 };
 
 const LEGACY_DEFAULT_LOGO = "/wia-logo.png";
@@ -34,6 +46,12 @@ function normalizeHexColor(input: unknown): string | undefined {
   if (/^#[0-9a-fA-F]{6}$/.test(v)) return v;
   if (/^[0-9a-fA-F]{6}$/.test(v)) return `#${v}`;
   return undefined;
+}
+
+/** Trims only leading/trailing newlines; inner content unchanged. */
+function normalizePlainText(input: unknown): string | undefined {
+  if (typeof input !== "string") return undefined;
+  return input.replace(/^\n+|\n+$/g, "");
 }
 
 function normalizeUrl(input: unknown): string | undefined {
@@ -76,6 +94,11 @@ export function sanitizeSignageConfig(input: unknown): SignageConfig {
 
   const logoUrl = normalizeUrl(obj.logoUrl) ?? DEFAULT_SIGNAGE_CONFIG.logoUrl;
   const qrUrl = normalizeUrl(obj.qrUrl) ?? DEFAULT_SIGNAGE_CONFIG.qrUrl;
+  const backgroundMediaUrl = normalizeUrl(obj.backgroundMediaUrl) ?? DEFAULT_SIGNAGE_CONFIG.backgroundMediaUrl;
+  const sidebarBackgroundMediaUrl =
+    normalizeUrl(obj.sidebarBackgroundMediaUrl) ?? DEFAULT_SIGNAGE_CONFIG.sidebarBackgroundMediaUrl;
+  const sidebarJoinHeadline =
+    normalizePlainText(obj.sidebarJoinHeadline) ?? DEFAULT_SIGNAGE_CONFIG.sidebarJoinHeadline;
   const promoImageUrls = normalizePromoUrls(obj.promoImageUrls).filter((u) => !LEGACY_DEFAULT_PROMOS.has(u));
   const spaceId = normalizeSpaceId(obj.spaceId) ?? DEFAULT_SIGNAGE_CONFIG.spaceId;
   const daysBack = normalizeNonNegativeInt(obj.daysBack) ?? DEFAULT_SIGNAGE_CONFIG.daysBack;
@@ -92,9 +115,18 @@ export function sanitizeSignageConfig(input: unknown): SignageConfig {
     maxCommentsPerPost,
     maxTotalComments,
     themeColor: normalizeHexColor(obj.themeColor) ?? DEFAULT_SIGNAGE_CONFIG.themeColor,
+    commentAreaBgColor:
+      normalizeHexColor(obj.commentAreaBgColor) ?? DEFAULT_SIGNAGE_CONFIG.commentAreaBgColor,
+    sidebarTextColor:
+      normalizeHexColor(obj.sidebarTextColor) ?? DEFAULT_SIGNAGE_CONFIG.sidebarTextColor,
+    sidebarBackgroundMediaUrl,
+    sidebarJoinHeadline,
+    promoCtaMessage:
+      normalizePlainText(obj.promoCtaMessage) ?? DEFAULT_SIGNAGE_CONFIG.promoCtaMessage,
     logoUrl: logoUrl === LEGACY_DEFAULT_LOGO ? "" : logoUrl,
     qrUrl: qrUrl === LEGACY_DEFAULT_QR ? "" : qrUrl,
     promoImageUrls,
+    backgroundMediaUrl,
   };
 }
 

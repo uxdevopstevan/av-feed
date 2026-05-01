@@ -1,5 +1,6 @@
 {
   "name": "av-feed",
+  "description": "Circle Audio Video Feed Signage",
   "version": "0.1.0",
   "private": true,
   "scripts": {
