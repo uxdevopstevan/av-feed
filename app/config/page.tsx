@@ -337,6 +337,83 @@ export default function ConfigPage() {
                     className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
                   />
                 </div>
+
+                <div className="mt-8 rounded-2xl border border-white/10 bg-black/20 p-5">
+                  <div className="text-base font-extrabold text-white/85">Display timing</div>
+                  <div className="mt-1 text-sm text-white/60">
+                    Stored per-device in localStorage. Controls how long posts stay on-screen and how quickly comments rotate.
+                  </div>
+
+                  <label className="mt-4 block text-base font-bold text-white/80">Comment interval (seconds)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.commentAdvanceMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, commentAdvanceMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+
+                  <label className="mt-4 block text-base font-bold text-white/80">Post minimum (seconds)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.postMinMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, postMinMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+
+                  <label className="mt-4 block text-base font-bold text-white/80">Post maximum (seconds)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.postMaxMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, postMaxMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+
+                  <label className="mt-4 block text-base font-bold text-white/80">Video minimum (seconds)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.videoMinMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, videoMinMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+
+                  <label className="mt-4 block text-base font-bold text-white/80">Video maximum (seconds)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.videoMaxMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, videoMaxMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+                </div>
               </>
             ) : activeTab === "promos" ? (
               <>

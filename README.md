@@ -51,7 +51,8 @@ Circle videos are commonly delivered as **HLS (`.m3u8`)**.
 
 - **Chrome / Windows**: we use **`hls.js`** to play HLS inside a normal `<video>`.
 - **Safari**: uses native HLS when available.
-- Videos autoplay muted and loop, and slides are capped to 10 seconds on-screen.
+- Videos autoplay muted (no audio) and **do not loop**.
+- Video slides stay on-screen for the **video duration**, clamped by per-device config (see “Display timing” below).
 
 ## Signage caching + polling (Vercel)
 
@@ -86,6 +87,18 @@ The config page also controls how much data we fetch from Circle. These values a
 - `maxPosts` (1–500): cap post fetch volume.
 - `maxCommentsPerPost` (0–25): cap comments per post in the bottom bar.
 - `maxTotalComments` (0–2000): cap total comments returned.
+
+## Display timing (per-device)
+
+The config page (`/config`) also controls display timing stored per-device in localStorage:
+
+- `commentAdvanceMs`: how often the bottom-bar comment rotates.
+- `postMinMs`: minimum time a text/image post stays on-screen.
+- `postMaxMs`: maximum time a text/image post stays on-screen.
+- `videoMinMs`: minimum time a video post stays on-screen.
+- `videoMaxMs`: maximum time a video post stays on-screen.
+
+Text/image post duration can extend to cycle through comments (up to `maxCommentsPerPost`) at `commentAdvanceMs`, capped by `postMaxMs`.
 
 ### What to verify on Vercel
 

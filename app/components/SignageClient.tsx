@@ -9,7 +9,6 @@ import type { LivePostComment, PromoSlide, SignageSnapshot } from "@/app/lib/typ
 
 const POLL_MS = 60_000;
 const ADVANCE_MS = 10_000;
-const VIDEO_MAX_MS = 10_000;
 const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
 
 const LS_DAY_KEY = "circle:dayKey";
@@ -65,6 +64,8 @@ export default function SignageClient() {
   const [activeMainIdx, setActiveMainIdx] = useState(0);
   const signatureRef = useRef<string | null>(null);
   const mainAdvanceTimer = useRef<number | null>(null);
+  const videoDurationMsByUrlRef = useRef(new Map<string, number>());
+  const [videoDurationTick, setVideoDurationTick] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const contentIdsRef = useRef<string[]>([]);
   const contentByIdRef = useRef(new Map<string, PostSlide>());
@@ -277,10 +278,22 @@ export default function SignageClient() {
   useEffect(() => {
     if (mainAdvanceTimer.current) window.clearTimeout(mainAdvanceTimer.current);
 
-    const ms =
-      "kind" in activeMain && activeMain.kind === "post" && (activeMain as PostSlide).media?.type === "video"
-        ? VIDEO_MAX_MS
-        : ADVANCE_MS;
+    const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
+
+    let ms = config.postMinMs;
+
+    if ("kind" in activeMain && activeMain.kind === "post") {
+      const media = (activeMain as PostSlide).media;
+      if (media?.type === "video") {
+        const known = videoDurationMsByUrlRef.current.get(media.url);
+        const desired = typeof known === "number" && Number.isFinite(known) && known > 0 ? known : config.videoMaxMs;
+        ms = clamp(desired, config.videoMinMs, config.videoMaxMs);
+      } else {
+        const commentCount = Math.min(activeComments.length, config.maxCommentsPerPost);
+        const commentDrivenMs = commentCount > 0 ? commentCount * config.commentAdvanceMs : config.postMinMs;
+        ms = clamp(Math.max(config.postMinMs, commentDrivenMs), config.postMinMs, config.postMaxMs);
+      }
+    }
 
     mainAdvanceTimer.current = window.setTimeout(() => {
       setActiveMainIdx((i) => (mainQueue.length ? (i + 1) % mainQueue.length : 0));
@@ -288,7 +301,19 @@ export default function SignageClient() {
     return () => {
       if (mainAdvanceTimer.current) window.clearTimeout(mainAdvanceTimer.current);
     };
-  }, [mainQueue.length, activeMainIdx, activeMain]);
+  }, [
+    mainQueue.length,
+    activeMainIdx,
+    activeMain,
+    videoDurationTick,
+    activeComments.length,
+    config.postMinMs,
+    config.postMaxMs,
+    config.videoMinMs,
+    config.videoMaxMs,
+    config.commentAdvanceMs,
+    config.maxCommentsPerPost,
+  ]);
 
   useEffect(() => {
     lastActiveKeyRef.current = itemKey(activeMain);
@@ -317,11 +342,11 @@ export default function SignageClient() {
       const curr = textIdxByPostIdRef.current.get(pid) ?? 0;
       textIdxByPostIdRef.current.set(pid, (curr + 1) % arr.length);
       setBottomTick((t) => t + 1);
-    }, ADVANCE_MS);
+    }, config.commentAdvanceMs);
     return () => {
       if (bottomAdvanceTimer.current) window.clearInterval(bottomAdvanceTimer.current);
     };
-  }, [commentsByPostId]);
+  }, [commentsByPostId, config.commentAdvanceMs]);
 
   return (
     <>
@@ -346,15 +371,23 @@ export default function SignageClient() {
           <motion.div
             key={`${activeMain.kind}-${"id" in activeMain ? activeMain.id : activeMainIdx}`}
             className="absolute inset-0"
-            initial={{ opacity: 1, zIndex: 0 }}
-            animate={{ opacity: 1, zIndex: 0 }}
-            exit={{ opacity: 0, zIndex: 1 }}
-            transition={{ opacity: { duration: 0.9, ease: "easeInOut" }, zIndex: { duration: 0 } }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.9, ease: "easeInOut" }}
           >
             {"kind" in activeMain && activeMain.kind === "promo" ? (
               <PromoMain item={activeMain} />
             ) : (
-              <PostMain item={activeMain as PostSlide} />
+              <PostMain
+                item={activeMain as PostSlide}
+                onVideoDurationMs={(url, ms) => {
+                  const prev = videoDurationMsByUrlRef.current.get(url);
+                  if (prev === ms) return;
+                  videoDurationMsByUrlRef.current.set(url, ms);
+                  setVideoDurationTick((t) => t + 1);
+                }}
+              />
             )}
           </motion.div>
         </AnimatePresence>
@@ -504,7 +537,13 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
   );
 }
 
-function PostMain({ item }: { item: PostSlide }) {
+function PostMain({
+  item,
+  onVideoDurationMs,
+}: {
+  item: PostSlide;
+  onVideoDurationMs?: (url: string, ms: number) => void;
+}) {
   if (!item.media) {
     return (
       <div className="absolute inset-0 flex items-center justify-center">
@@ -516,7 +555,7 @@ function PostMain({ item }: { item: PostSlide }) {
               <div className="text-3xl font-extrabold leading-tight text-white/95">{item.authorName}</div>
             </div>
               <div className="mt-8 text-[2.5rem] leading-tight font-extrabold text-white line-clamp-6">
-              {item.caption || " "}
+              {item.caption ? `“${item.caption}”` : " "}
             </div>
           </div>
         </div>
@@ -564,6 +603,7 @@ function PostMain({ item }: { item: PostSlide }) {
               src={media.url}
               className="h-full w-full object-contain"
               poster={media.posterUrl ?? null}
+              onDurationMs={(ms) => onVideoDurationMs?.(media.url, ms)}
             />
           </div>
         </>
@@ -607,16 +647,25 @@ function HlsVideo({
   src,
   className,
   poster,
+  onDurationMs,
 }: {
   src: string;
   className?: string;
   poster?: string | null;
+  onDurationMs?: (ms: number) => void;
 }) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
+
+    const onLoadedMeta = () => {
+      const d = video.duration;
+      if (!Number.isFinite(d) || d <= 0) return;
+      onDurationMs?.(Math.round(d * 1000));
+    };
+    video.addEventListener("loadedmetadata", onLoadedMeta);
 
     // Reset any prior state.
     video.pause();
@@ -636,7 +685,9 @@ function HlsVideo({
       video.src = src;
       // Autoplay can still be blocked in some environments; ignore errors.
       video.play().catch(() => {});
-      return;
+      return () => {
+        video.removeEventListener("loadedmetadata", onLoadedMeta);
+      };
     }
 
     // For HLS on Chrome/Windows, prefer hls.js when supported.
@@ -644,7 +695,9 @@ function HlsVideo({
       // Last-resort fallback: some environments might still try playing.
       video.src = src;
       video.play().catch(() => {});
-      return;
+      return () => {
+        video.removeEventListener("loadedmetadata", onLoadedMeta);
+      };
     }
 
     const hls = new Hls({
@@ -668,8 +721,9 @@ function HlsVideo({
       } catch {
         // ignore
       }
+      video.removeEventListener("loadedmetadata", onLoadedMeta);
     };
-  }, [src]);
+  }, [src, onDurationMs]);
 
   return (
     <video
@@ -677,7 +731,6 @@ function HlsVideo({
       poster={poster ?? undefined}
       autoPlay
       muted
-      loop
       playsInline
       preload="metadata"
       className={className}
@@ -694,19 +747,30 @@ function TextCommentTicker({ item }: { item: LivePostComment | null }) {
     );
   }
 
+  const hasImage = (item.imageUrls?.length ?? 0) > 0;
+  const trimmedText = (item.text ?? "").trim();
+  const hasText = trimmedText.length > 0;
+
   return (
-    <div className="h-full flex items-center">
-      <div className="min-w-0 w-full">
-        <div className="text-3xl font-bold text-white/80">Latest comments</div>
-        <div className="mt-4 flex items-center gap-6 min-w-0">
-          <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={64} />
-          <div className="min-w-0">
-            <div className="text-2xl font-extrabold leading-tight">{item.authorName}</div>
-            <div className="mt-2 text-[2.25rem] leading-tight font-semibold text-white/90 line-clamp-3">
-              {item.text || " "}
-            </div>
+    <div className="h-full flex items-center justify-center text-center">
+      <div className="w-full px-6">
+        <div className="text-3xl font-extrabold text-white/90 leading-tight truncate">{item.authorName}</div>
+
+        {hasText ? (
+          <div className="mt-3 text-[2.25rem] leading-tight font-semibold italic text-white/90 line-clamp-3">
+            {`“${trimmedText}”`}
           </div>
-        </div>
+        ) : hasImage ? (
+          <div className="mt-3 text-[2.25rem] leading-tight font-semibold text-white/85">📸 [Image Attached] in comment</div>
+        ) : (
+          <div className="mt-3 text-[2.25rem] leading-tight font-semibold italic text-white/90 line-clamp-3">
+            {" "}
+          </div>
+        )}
+
+        {hasText && hasImage ? (
+          <div className="mt-3 text-2xl font-semibold text-white/70">📸 [Image Attached]</div>
+        ) : null}
       </div>
     </div>
   );

@@ -4,6 +4,11 @@ export type SignageConfig = {
   maxPosts: number;
   maxCommentsPerPost: number;
   maxTotalComments: number;
+  commentAdvanceMs: number;
+  postMinMs: number;
+  postMaxMs: number;
+  videoMinMs: number;
+  videoMaxMs: number;
   themeColor: string;
   commentAreaBgColor: string;
   sidebarTextColor: string;
@@ -24,6 +29,11 @@ export const DEFAULT_SIGNAGE_CONFIG: SignageConfig = {
   maxPosts: 200,
   maxCommentsPerPost: 10,
   maxTotalComments: 800,
+  commentAdvanceMs: 4000,
+  postMinMs: 10_000,
+  postMaxMs: 40_000,
+  videoMinMs: 10_000,
+  videoMaxMs: 60_000,
   themeColor: "#701a56",
   commentAreaBgColor: "#1A1A1A",
   sidebarTextColor: "#FFFFFF",
@@ -108,12 +118,26 @@ export function sanitizeSignageConfig(input: unknown): SignageConfig {
   const maxTotalComments =
     normalizeNonNegativeInt(obj.maxTotalComments) ?? DEFAULT_SIGNAGE_CONFIG.maxTotalComments;
 
+  const commentAdvanceMs =
+    normalizeNonNegativeInt(obj.commentAdvanceMs) ?? DEFAULT_SIGNAGE_CONFIG.commentAdvanceMs;
+  const postMinMs = normalizeNonNegativeInt(obj.postMinMs) ?? DEFAULT_SIGNAGE_CONFIG.postMinMs;
+  const postMaxMsRaw = normalizeNonNegativeInt(obj.postMaxMs) ?? DEFAULT_SIGNAGE_CONFIG.postMaxMs;
+  const postMaxMs = Math.max(postMinMs, postMaxMsRaw);
+  const videoMinMs = normalizeNonNegativeInt(obj.videoMinMs) ?? DEFAULT_SIGNAGE_CONFIG.videoMinMs;
+  const videoMaxMsRaw = normalizeNonNegativeInt(obj.videoMaxMs) ?? DEFAULT_SIGNAGE_CONFIG.videoMaxMs;
+  const videoMaxMs = Math.max(videoMinMs, videoMaxMsRaw);
+
   return {
     spaceId,
     daysBack,
     maxPosts,
     maxCommentsPerPost,
     maxTotalComments,
+    commentAdvanceMs,
+    postMinMs,
+    postMaxMs,
+    videoMinMs,
+    videoMaxMs,
     themeColor: normalizeHexColor(obj.themeColor) ?? DEFAULT_SIGNAGE_CONFIG.themeColor,
     commentAreaBgColor:
       normalizeHexColor(obj.commentAreaBgColor) ?? DEFAULT_SIGNAGE_CONFIG.commentAreaBgColor,
