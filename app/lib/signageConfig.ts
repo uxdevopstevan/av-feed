@@ -1,4 +1,9 @@
 export type SignageConfig = {
+  spaceId: number | null;
+  daysBack: number;
+  maxPosts: number;
+  maxCommentsPerPost: number;
+  maxTotalComments: number;
   themeColor: string;
   logoUrl: string;
   qrUrl: string;
@@ -8,6 +13,11 @@ export type SignageConfig = {
 export const SIGNAGE_CONFIG_LS_KEY = "staypost:config:v1";
 
 export const DEFAULT_SIGNAGE_CONFIG: SignageConfig = {
+  spaceId: null,
+  daysBack: 0,
+  maxPosts: 200,
+  maxCommentsPerPost: 10,
+  maxTotalComments: 800,
   themeColor: "#701a56",
   logoUrl: "",
   qrUrl: "",
@@ -42,14 +52,45 @@ function normalizePromoUrls(input: unknown): string[] {
   return Array.from(new Set(out));
 }
 
+function normalizeSpaceId(input: unknown): number | null | undefined {
+  if (input === null) return null;
+  if (typeof input === "number" && Number.isFinite(input)) return input;
+  if (typeof input === "string" && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
+
+function normalizeNonNegativeInt(input: unknown): number | undefined {
+  if (typeof input === "number" && Number.isFinite(input)) return Math.max(0, Math.floor(input));
+  if (typeof input === "string" && input.trim()) {
+    const n = Number(input);
+    if (Number.isFinite(n)) return Math.max(0, Math.floor(n));
+  }
+  return undefined;
+}
+
 export function sanitizeSignageConfig(input: unknown): SignageConfig {
   const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
 
   const logoUrl = normalizeUrl(obj.logoUrl) ?? DEFAULT_SIGNAGE_CONFIG.logoUrl;
   const qrUrl = normalizeUrl(obj.qrUrl) ?? DEFAULT_SIGNAGE_CONFIG.qrUrl;
   const promoImageUrls = normalizePromoUrls(obj.promoImageUrls).filter((u) => !LEGACY_DEFAULT_PROMOS.has(u));
+  const spaceId = normalizeSpaceId(obj.spaceId) ?? DEFAULT_SIGNAGE_CONFIG.spaceId;
+  const daysBack = normalizeNonNegativeInt(obj.daysBack) ?? DEFAULT_SIGNAGE_CONFIG.daysBack;
+  const maxPosts = normalizeNonNegativeInt(obj.maxPosts) ?? DEFAULT_SIGNAGE_CONFIG.maxPosts;
+  const maxCommentsPerPost =
+    normalizeNonNegativeInt(obj.maxCommentsPerPost) ?? DEFAULT_SIGNAGE_CONFIG.maxCommentsPerPost;
+  const maxTotalComments =
+    normalizeNonNegativeInt(obj.maxTotalComments) ?? DEFAULT_SIGNAGE_CONFIG.maxTotalComments;
 
   return {
+    spaceId,
+    daysBack,
+    maxPosts,
+    maxCommentsPerPost,
+    maxTotalComments,
     themeColor: normalizeHexColor(obj.themeColor) ?? DEFAULT_SIGNAGE_CONFIG.themeColor,
     logoUrl: logoUrl === LEGACY_DEFAULT_LOGO ? "" : logoUrl,
     qrUrl: qrUrl === LEGACY_DEFAULT_QR ? "" : qrUrl,

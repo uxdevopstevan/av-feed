@@ -32,10 +32,39 @@ export default function ConfigPage() {
   const [unlocked, setUnlocked] = useState(false);
   const [draft, setDraft] = useState(config);
   const [didSave, setDidSave] = useState(false);
+  const [spaces, setSpaces] = useState<Array<{ id: number; name: string }> | null>(null);
+  const [spacesError, setSpacesError] = useState<string | null>(null);
 
   useEffect(() => {
     setDraft(config);
   }, [config]);
+
+  useEffect(() => {
+    if (!unlocked) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setSpacesError(null);
+        const res = await fetch("/api/circle/spaces", { cache: "no-store" });
+        const json = (await res.json()) as { spaces?: Array<{ id: number; name: string }>; error?: string };
+        if (cancelled) return;
+        if (!res.ok) {
+          setSpacesError(json?.error || `Failed to load spaces (${res.status})`);
+          setSpaces([]);
+          return;
+        }
+        setSpaces(Array.isArray(json?.spaces) ? json.spaces : []);
+      } catch (e) {
+        if (!cancelled) {
+          setSpacesError(e instanceof Error ? e.message : "Failed to load spaces");
+          setSpaces([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [unlocked]);
 
   useEffect(() => {
     try {
@@ -182,6 +211,79 @@ export default function ConfigPage() {
         <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
           <section className="rounded-3xl border border-white/15 bg-white/5 p-6">
             <div className="text-xl font-extrabold">Theme settings</div>
+
+            <label className="mt-6 block text-base font-bold text-white/80">Circle space</label>
+            <div className="mt-3">
+              <select
+                value={draft.spaceId === null ? "" : String(draft.spaceId)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft((d) => ({ ...d, spaceId: v ? Number(v) : null }));
+                }}
+                className="w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40"
+              >
+                <option value="">Default (server)</option>
+                {(spaces ?? []).map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.name} ({s.id})
+                  </option>
+                ))}
+              </select>
+              {spaces === null ? (
+                <div className="mt-2 text-sm text-white/60">Loading spaces…</div>
+              ) : spacesError ? (
+                <div className="mt-2 text-sm text-rose-200">{spacesError}</div>
+              ) : null}
+            </div>
+
+            <div className="mt-8 rounded-2xl border border-white/10 bg-black/20 p-5">
+              <div className="text-base font-extrabold text-white/85">Feed limits</div>
+              <div className="mt-1 text-sm text-white/60">
+                Stored per-device in localStorage. Server will clamp to safe maximums.
+              </div>
+
+              <label className="mt-4 block text-base font-bold text-white/80">Days back</label>
+              <input
+                type="number"
+                min={0}
+                max={30}
+                value={draft.daysBack}
+                onChange={(e) => setDraft((d) => ({ ...d, daysBack: Number(e.target.value) }))}
+                className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+              />
+
+              <label className="mt-4 block text-base font-bold text-white/80">Max posts</label>
+              <input
+                type="number"
+                min={1}
+                max={500}
+                value={draft.maxPosts}
+                onChange={(e) => setDraft((d) => ({ ...d, maxPosts: Number(e.target.value) }))}
+                className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+              />
+
+              <label className="mt-4 block text-base font-bold text-white/80">Max comments per post</label>
+              <input
+                type="number"
+                min={0}
+                max={25}
+                value={draft.maxCommentsPerPost}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, maxCommentsPerPost: Number(e.target.value) }))
+                }
+                className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+              />
+
+              <label className="mt-4 block text-base font-bold text-white/80">Max total comments</label>
+              <input
+                type="number"
+                min={0}
+                max={2000}
+                value={draft.maxTotalComments}
+                onChange={(e) => setDraft((d) => ({ ...d, maxTotalComments: Number(e.target.value) }))}
+                className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+              />
+            </div>
 
             <label className="mt-4 block text-base font-bold text-white/80">Sidebar color</label>
             <div className="mt-4 flex items-center gap-4">

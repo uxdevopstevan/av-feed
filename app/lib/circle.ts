@@ -1,3 +1,4 @@
+import "server-only";
 import type { LivePostComment, SignageSnapshot } from "./types";
 
 const CIRCLE_BASE_URL = "https://app.circle.so";
@@ -7,6 +8,26 @@ const POSTS_PER_PAGE = 60;
 const COMMENTS_PER_PAGE = 100;
 const MAX_COMMENTS_PER_POST = 25;
 
+export type SignageSnapshotOptions = {
+  daysBack?: number;
+  maxPosts?: number;
+  maxCommentsPerPost?: number;
+  maxTotalComments?: number;
+};
+
+function clampInt(v: number | undefined, def: number, min: number, max: number): number {
+  if (!Number.isFinite(v as number)) return def;
+  return Math.min(max, Math.max(min, Math.floor(v as number)));
+}
+
+function normalizeOpts(input?: SignageSnapshotOptions) {
+  const daysBack = clampInt(input?.daysBack, 0, 0, 30);
+  const maxPosts = clampInt(input?.maxPosts, 200, 1, 500);
+  const maxCommentsPerPost = clampInt(input?.maxCommentsPerPost, 10, 0, 25);
+  const maxTotalComments = clampInt(input?.maxTotalComments, 800, 0, 2000);
+  return { daysBack, maxPosts, maxCommentsPerPost, maxTotalComments };
+}
+
 function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) throw new Error(`Missing env var: ${name}`);
@@ -14,7 +35,7 @@ function requireEnv(name: string): string {
 }
 
 function circleAuthHeaders() {
-  const token = requireEnv("NEXT_PUBLIC_CIRCLE_API_TOKEN");
+  const token = requireEnv("CIRCLE_API_TOKEN");
   return {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
@@ -33,6 +54,7 @@ type CirclePaged<T> = {
 type CirclePost = {
   id: number;
   user_name?: string;
+  user_avatar_url?: string | null;
   body?: { body?: string };
   body_plain_text?: string;
   cover_image_url?: string | null;
@@ -42,6 +64,7 @@ type CirclePost = {
   tiptap_body?: {
     circle_ios_fallback_text?: string;
     attachments?: unknown[];
+    inline_attachments?: unknown[];
   };
   attachments?: unknown[];
   space_id?: number;
@@ -53,7 +76,7 @@ type CircleComment = {
   id: number;
   created_at?: string;
   body?: { body?: string };
-  user?: { name?: string };
+  user?: { name?: string; avatar_url?: string | null };
   post?: { id?: number };
 };
 
@@ -85,6 +108,62 @@ function looksLikeUrl(v: unknown): v is string {
 function looksLikeVideoUrl(v: unknown): v is string {
   if (!looksLikeUrl(v)) return false;
   return /\.(mp4|mov|webm|m4v)(?:\?|#|$)/i.test(v);
+}
+
+function getString(obj: unknown, key: string): string | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  return typeof v === "string" ? v : undefined;
+}
+
+function getRecord(obj: unknown, key: string): Record<string, unknown> | undefined {
+  if (!obj || typeof obj !== "object") return undefined;
+  const v = (obj as Record<string, unknown>)[key];
+  return v && typeof v === "object" ? (v as Record<string, unknown>) : undefined;
+}
+
+function extractPostMediaFromInlineAttachments(
+  inline: unknown,
+): { imageUrl?: string; videoUrl?: string } {
+  if (!Array.isArray(inline)) return {};
+  let imageUrl: string | undefined;
+  let videoUrl: string | undefined;
+
+  for (const a of inline) {
+    if (!a || typeof a !== "object") continue;
+    const anyA = a as Record<string, unknown>;
+    const contentType = typeof anyA.content_type === "string" ? anyA.content_type : "";
+
+    if (!videoUrl && contentType.startsWith("video/")) {
+      const videoVariants = getRecord(anyA, "video_variants");
+      const hls = videoVariants ? getString(videoVariants, "hls") : undefined;
+      const original = videoVariants ? getString(videoVariants, "original") : undefined;
+      const url = getString(anyA, "url");
+      const pick = (hls && looksLikeUrl(hls) ? hls : undefined) ??
+        (original && looksLikeUrl(original) ? original : undefined) ??
+        (url && looksLikeUrl(url) ? url : undefined);
+      if (pick) videoUrl = pick;
+    }
+
+    if (!imageUrl && contentType.startsWith("image/")) {
+      const imageVariants = getRecord(anyA, "image_variants");
+      const original = imageVariants ? getString(imageVariants, "original") : undefined;
+      const large = imageVariants ? getString(imageVariants, "large") : undefined;
+      const medium = imageVariants ? getString(imageVariants, "medium") : undefined;
+      const small = imageVariants ? getString(imageVariants, "small") : undefined;
+      const thumb = imageVariants ? getString(imageVariants, "thumbnail") : undefined;
+      const url = getString(anyA, "url");
+      const pick = (original && looksLikeUrl(original) ? original : undefined) ??
+        (large && looksLikeUrl(large) ? large : undefined) ??
+        (medium && looksLikeUrl(medium) ? medium : undefined) ??
+        (small && looksLikeUrl(small) ? small : undefined) ??
+        (thumb && looksLikeUrl(thumb) ? thumb : undefined) ??
+        (url && looksLikeUrl(url) ? url : undefined);
+      if (pick) imageUrl = pick;
+    }
+  }
+
+  return { imageUrl, videoUrl };
 }
 
 function extractFirstImageUrlFromAttachments(attachments: unknown): string | undefined {
@@ -128,6 +207,9 @@ function extractFirstVideoUrlFromAttachments(attachments: unknown): string | und
 }
 
 function extractPostImageUrl(p: CirclePost): string | undefined {
+  const inline = extractPostMediaFromInlineAttachments(p.tiptap_body?.inline_attachments);
+  if (inline.imageUrl) return inline.imageUrl;
+
   const direct =
     (p.cover_image_url && looksLikeUrl(p.cover_image_url) ? p.cover_image_url : undefined) ??
     (p.cardview_thumbnail_url && looksLikeUrl(p.cardview_thumbnail_url)
@@ -182,6 +264,9 @@ function extractVideoUrlsFromHtml(html: string): string[] {
 }
 
 function extractPostVideoUrl(p: CirclePost): string | undefined {
+  const inline = extractPostMediaFromInlineAttachments(p.tiptap_body?.inline_attachments);
+  if (inline.videoUrl) return inline.videoUrl;
+
   const fromTiptap = extractFirstVideoUrlFromAttachments(p.tiptap_body?.attachments);
   if (fromTiptap) return fromTiptap;
 
@@ -239,11 +324,23 @@ function localDateTimeToUtcMs(
   return utcMs;
 }
 
+function pad2(n: number) {
+  return n.toString().padStart(2, "0");
+}
+
+function dayKeyFromParts(p: { year: number; month: number; day: number }) {
+  return `${p.year.toString().padStart(4, "0")}-${pad2(p.month)}-${pad2(p.day)}`;
+}
+
+function addDaysToYmd(p: { year: number; month: number; day: number }, deltaDays: number) {
+  const d = new Date(Date.UTC(p.year, p.month - 1, p.day));
+  d.setUTCDate(d.getUTCDate() + deltaDays);
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate() };
+}
+
 function londonDayWindow(now = new Date()) {
   const p = getZonedParts(now, EVENT_TZ);
-  const dayKey = `${p.year.toString().padStart(4, "0")}-${p.month
-    .toString()
-    .padStart(2, "0")}-${p.day.toString().padStart(2, "0")}`;
+  const dayKey = dayKeyFromParts(p);
   const startUtcMs = localDateTimeToUtcMs(
     { year: p.year, month: p.month, day: p.day, hour: 0, minute: 0, second: 0 },
     EVENT_TZ,
@@ -252,6 +349,25 @@ function londonDayWindow(now = new Date()) {
     { year: p.year, month: p.month, day: p.day, hour: 23, minute: 59, second: 59 },
     EVENT_TZ,
   );
+  return { dayKey, startUtcMs, endUtcMs: endUtcMs + 1000 };
+}
+
+function londonRangeWindow(daysBack: number, now = new Date()) {
+  const p = getZonedParts(now, EVENT_TZ);
+  const endKey = dayKeyFromParts(p);
+  const startParts = addDaysToYmd({ year: p.year, month: p.month, day: p.day }, -daysBack);
+  const startKey = dayKeyFromParts(startParts);
+
+  const startUtcMs = localDateTimeToUtcMs(
+    { ...startParts, hour: 0, minute: 0, second: 0 },
+    EVENT_TZ,
+  );
+  const endUtcMs = localDateTimeToUtcMs(
+    { year: p.year, month: p.month, day: p.day, hour: 23, minute: 59, second: 59 },
+    EVENT_TZ,
+  );
+
+  const dayKey = daysBack === 0 ? endKey : `${startKey}_to_${endKey}`;
   return { dayKey, startUtcMs, endUtcMs: endUtcMs + 1000 };
 }
 
@@ -281,12 +397,13 @@ async function circleFetchJson<T>(path: string, init?: RequestInit): Promise<T> 
   return (await res.json()) as T;
 }
 
-async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: number) {
+async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: number, maxPosts: number) {
   const out: Array<{ post: CirclePost; imageUrl?: string; videoUrl?: string }> = [];
   let page = 1;
   let shouldContinue = true;
 
-  while (shouldContinue && out.length < MAX_POSTS_PER_DAY) {
+  const limit = Math.min(MAX_POSTS_PER_DAY, maxPosts);
+  while (shouldContinue && out.length < limit) {
     const resp = await circleFetchJson<CirclePaged<CirclePost>>(
       `/api/admin/v2/posts?space_id=${spaceId}&page=${page}&per_page=${POSTS_PER_PAGE}&status=published&sort=latest`,
     );
@@ -301,7 +418,7 @@ async function fetchTodayPosts(spaceId: number, startUtcMs: number, endUtcMs: nu
       const imageUrl = extractPostImageUrl(p);
       const videoUrl = extractPostVideoUrl(p);
       out.push({ post: p, imageUrl, videoUrl });
-      if (out.length >= MAX_POSTS_PER_DAY) break;
+      if (out.length >= limit) break;
     }
 
     if (!resp.has_next_page) break;
@@ -316,16 +433,19 @@ async function fetchTodayCommentsByPostId(
   postIds: Set<number>,
   startUtcMs: number,
   endUtcMs: number,
+  opts: { maxCommentsPerPost: number; maxTotalComments: number },
 ) {
   const byPostId = new Map<number, LivePostComment[]>();
   const counts = new Map<number, number>();
+  let total = 0;
 
   let page = 1;
   let shouldContinue = true;
 
   const needsMore = () => {
+    if (total >= opts.maxTotalComments) return false;
     for (const id of postIds) {
-      if ((counts.get(id) ?? 0) < MAX_COMMENTS_PER_POST) return true;
+      if ((counts.get(id) ?? 0) < opts.maxCommentsPerPost) return true;
     }
     return false;
   };
@@ -346,12 +466,14 @@ async function fetchTodayCommentsByPostId(
       if (!postId || !postIds.has(postId)) continue;
 
       const currentCount = counts.get(postId) ?? 0;
-      if (currentCount >= MAX_COMMENTS_PER_POST) continue;
+      if (currentCount >= opts.maxCommentsPerPost) continue;
+      if (total >= opts.maxTotalComments) continue;
 
       const bodyHtml = (c.body?.body ?? "").trim();
       const comment: LivePostComment = {
         id: c.id,
         authorName: c.user?.name?.trim() || "Member",
+        authorAvatarUrl: c.user?.avatar_url ?? null,
         text: stripHtmlToText(bodyHtml),
         createdAt: c.created_at,
         imageUrls: bodyHtml ? extractImageUrlsFromHtml(bodyHtml) : [],
@@ -362,6 +484,7 @@ async function fetchTodayCommentsByPostId(
       arr.push(comment);
       byPostId.set(postId, arr);
       counts.set(postId, currentCount + 1);
+      total += 1;
     }
 
     if (!resp.has_next_page) break;
@@ -406,48 +529,32 @@ function buildSignature(input: {
   return `p:${postPart}#c:${commentPart}`;
 }
 
-export async function fetchTodaySignageSnapshot(spaceId: number): Promise<SignageSnapshot> {
-  const { dayKey, startUtcMs, endUtcMs } = londonDayWindow();
+export async function fetchTodaySignageSnapshot(
+  spaceId: number,
+  options?: SignageSnapshotOptions,
+): Promise<SignageSnapshot> {
+  const opts = normalizeOpts(options);
+  const { dayKey, startUtcMs, endUtcMs } = londonRangeWindow(opts.daysBack);
   const nowIso = new Date().toISOString();
 
-  const postsWithMaybeMedia = await fetchTodayPosts(spaceId, startUtcMs, endUtcMs);
+  const postsWithMaybeMedia = await fetchTodayPosts(spaceId, startUtcMs, endUtcMs, opts.maxPosts);
   const postIds = new Set(postsWithMaybeMedia.map((p) => p.post.id));
-  const commentsByPostId = await fetchTodayCommentsByPostId(
-    spaceId,
-    postIds,
-    startUtcMs,
-    endUtcMs,
-  );
-
-  const pickFallbackImageUrlFromComments = (postId: number): string | undefined => {
-    const comments = commentsByPostId.get(postId) ?? [];
-    for (const c of comments) {
-      const url = c.imageUrls?.[0];
-      if (url) return url;
-    }
-    return undefined;
-  };
-
-  const pickFallbackVideoUrlFromComments = (postId: number): string | undefined => {
-    const comments = commentsByPostId.get(postId) ?? [];
-    for (const c of comments) {
-      const url = c.videoUrls?.[0];
-      if (url) return url;
-    }
-    return undefined;
-  };
+  const commentsByPostId = await fetchTodayCommentsByPostId(spaceId, postIds, startUtcMs, endUtcMs, {
+    maxCommentsPerPost: opts.maxCommentsPerPost,
+    maxTotalComments: opts.maxTotalComments,
+  });
 
   const posts: SignageSnapshot["posts"] = postsWithMaybeMedia.map(({ post, imageUrl, videoUrl }) => ({
     id: post.id,
     authorName: post.user_name?.trim() || "Anonymous",
+    authorAvatarUrl: post.user_avatar_url ?? null,
     caption: pickPostCaption(post),
-    imageUrl: imageUrl ?? pickFallbackImageUrlFromComments(post.id),
-    videoUrl: videoUrl ?? pickFallbackVideoUrlFromComments(post.id),
+    imageUrl: imageUrl ?? null,
+    videoUrl: videoUrl ?? null,
     updatedAt: post.updated_at,
     commentsCount: post.comments_count,
   }));
 
-  // Ensure newest comments first per post.
   const commentsByPostIdObj: Record<string, LivePostComment[]> = {};
   for (const p of posts) {
     const arr = commentsByPostId.get(p.id) ?? [];

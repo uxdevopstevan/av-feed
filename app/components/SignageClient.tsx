@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Hls from "hls.js";
 import { useSignageConfig } from "@/app/components/SignageConfigProvider";
 import type { LivePostComment, PromoSlide, SignageSnapshot } from "@/app/lib/types";
 
@@ -14,20 +15,23 @@ const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
 const LS_DAY_KEY = "staypost:dayKey";
 const lsSnapshotKey = (dayKey: string) => `staypost:snapshot:${dayKey}`;
 
-type TextOnlyComment = LivePostComment & { postId: number };
 type Media = { type: "image" | "video"; url: string };
-type MediaSlide = {
-  kind: "commentMedia" | "postMedia";
+type PostSlide = {
+  kind: "post";
   id: string;
   postId: number;
   authorName: string;
-  text: string;
+  authorAvatarUrl?: string | null;
+  caption: string;
   createdAt?: string;
-  media: Media;
+  media?: Media;
 };
-type MainDisplayItem = PromoSlide | MediaSlide;
+type MainDisplayItem = PromoSlide | PostSlide;
 
-function buildMainQueue(promos: PromoSlide[], content: MediaSlide[]): MainDisplayItem[] {
+const PROMO_CTA = "Join Staypost using the QR code on the left. Post your photos or comment on others.";
+const EMPTY_POST_CTA = "Be the first to comment on this post";
+
+function buildMainQueue(promos: PromoSlide[], content: PostSlide[]): MainDisplayItem[] {
   if (content.length === 0) return promos;
 
   // Target ~25% promos by inserting 1 promo after every 3 comment-image slides.
@@ -58,15 +62,17 @@ export default function SignageClient() {
   const { config } = useSignageConfig();
   const [snapshot, setSnapshot] = useState<SignageSnapshot | null>(null);
   const [activeMainIdx, setActiveMainIdx] = useState(0);
-  const [activeTextIdx, setActiveTextIdx] = useState(0);
   const signatureRef = useRef<string | null>(null);
   const mainAdvanceTimer = useRef<number | null>(null);
-  const textAdvanceTimer = useRef<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const contentIdsRef = useRef<string[]>([]);
-  const contentByIdRef = useRef(new Map<string, MediaSlide>());
+  const contentByIdRef = useRef(new Map<string, PostSlide>());
   const lastActiveKeyRef = useRef<string | null>(null);
   const [contentIds, setContentIds] = useState<string[]>([]);
+  const activePostIdRef = useRef<number | null>(null);
+  const textIdxByPostIdRef = useRef(new Map<number, number>());
+  const bottomAdvanceTimer = useRef<number | null>(null);
+  const [bottomTick, setBottomTick] = useState(0);
 
   const promoSlides = useMemo<PromoSlide[]>(() => {
     const urls = config.promoImageUrls ?? [];
@@ -78,82 +84,31 @@ export default function SignageClient() {
     }));
   }, [config.promoImageUrls]);
 
-  const { mediaSlidesLatest, textOnlyComments } = useMemo(() => {
-    const commentsByPostId = snapshot?.commentsByPostId ?? {};
-    const media: MediaSlide[] = [];
-    const textOnly: TextOnlyComment[] = [];
-
-    for (const [postIdStr, comments] of Object.entries(commentsByPostId)) {
-      const postId = Number(postIdStr);
-      if (!Number.isFinite(postId) || !Array.isArray(comments)) continue;
-
-      for (const c of comments) {
-        const img = c.imageUrls?.[0];
-        const vid = c.videoUrls?.[0];
-        if (img) {
-          media.push({
-            kind: "commentMedia",
-            id: `comment-${c.id}-img`,
-            postId,
-            authorName: c.authorName,
-            text: c.text,
-            createdAt: c.createdAt,
-            media: { type: "image", url: img },
-          });
-        }
-        if (vid) {
-          media.push({
-            kind: "commentMedia",
-            id: `comment-${c.id}-vid`,
-            postId,
-            authorName: c.authorName,
-            text: c.text,
-            createdAt: c.createdAt,
-            media: { type: "video", url: vid },
-          });
-        }
-
-        if (!img && !vid) {
-          textOnly.push({ ...c, postId });
-        }
-      }
-    }
-
+  const { postSlidesLatest, commentsByPostId } = useMemo(() => {
+    const posts: PostSlide[] = [];
     for (const p of snapshot?.posts ?? []) {
-      if (p.imageUrl) {
-        media.push({
-          kind: "postMedia",
-          id: `post-${p.id}-img`,
-          postId: p.id,
-          authorName: p.authorName,
-          text: p.caption,
-          createdAt: p.updatedAt,
-          media: { type: "image", url: String(p.imageUrl) },
-        });
-      }
-      if (p.videoUrl) {
-        media.push({
-          kind: "postMedia",
-          id: `post-${p.id}-vid`,
-          postId: p.id,
-          authorName: p.authorName,
-          text: p.caption,
-          createdAt: p.updatedAt,
-          media: { type: "video", url: String(p.videoUrl) },
-        });
-      }
+      const media: Media | undefined = p.videoUrl
+        ? { type: "video", url: String(p.videoUrl) }
+        : p.imageUrl
+          ? { type: "image", url: String(p.imageUrl) }
+          : undefined;
+      posts.push({
+        kind: "post",
+        id: `post-${p.id}`,
+        postId: p.id,
+        authorName: p.authorName,
+        authorAvatarUrl: p.authorAvatarUrl ?? null,
+        caption: p.caption,
+        createdAt: p.updatedAt,
+        media,
+      });
     }
-
-    const byCreatedDesc = <T extends { createdAt?: string }>(a: T, b: T) =>
-      toSortableIso(b.createdAt).localeCompare(toSortableIso(a.createdAt));
-    media.sort(byCreatedDesc);
-    textOnly.sort(byCreatedDesc);
-
-    return { mediaSlidesLatest: media, textOnlyComments: textOnly };
+    posts.sort((a, b) => toSortableIso(b.createdAt).localeCompare(toSortableIso(a.createdAt)));
+    return { postSlidesLatest: posts, commentsByPostId: snapshot?.commentsByPostId ?? {} };
   }, [snapshot]);
 
   useEffect(() => {
-    const latest = mediaSlidesLatest;
+    const latest = postSlidesLatest;
     const latestIds = new Set(latest.map((s) => s.id));
     const byId = contentByIdRef.current;
 
@@ -184,10 +139,10 @@ export default function SignageClient() {
 
     // Force a re-render so updated slide text/media is reflected.
     setContentIds((prev) => (prev.length === contentIdsRef.current.length ? [...contentIdsRef.current] : prev));
-  }, [mediaSlidesLatest]);
+  }, [postSlidesLatest]);
 
   const contentSlides = useMemo(
-    () => contentIds.map((id) => contentByIdRef.current.get(id)).filter(Boolean) as MediaSlide[],
+    () => contentIds.map((id) => contentByIdRef.current.get(id)).filter(Boolean) as PostSlide[],
     [contentIds],
   );
 
@@ -195,9 +150,12 @@ export default function SignageClient() {
   const activeMain = mainQueue.length
     ? mainQueue[activeMainIdx % mainQueue.length]
     : promoSlides[0] ?? { kind: "promo", id: "promo-fallback", title: "" };
-  const activeText = textOnlyComments.length
-    ? textOnlyComments[activeTextIdx % textOnlyComments.length]
-    : null;
+  const activePostId =
+    "kind" in activeMain && activeMain.kind === "post" ? (activeMain as PostSlide).postId : null;
+  const activeComments = activePostId ? commentsByPostId[String(activePostId)] ?? [] : [];
+  const activeCommentIdx = activePostId ? (textIdxByPostIdRef.current.get(activePostId) ?? 0) : 0;
+  const activeComment =
+    activePostId && activeComments.length ? activeComments[activeCommentIdx % activeComments.length] : null;
 
   useEffect(() => {
     const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -253,11 +211,19 @@ export default function SignageClient() {
 
     async function poll() {
       try {
-        const res = await fetch("/api/circle/posts", { cache: "no-store" });
+        const spaceId = config.spaceId;
+        const params = new URLSearchParams();
+        if (typeof spaceId === "number" && Number.isFinite(spaceId)) params.set("spaceId", String(spaceId));
+        params.set("daysBack", String(config.daysBack));
+        params.set("maxPosts", String(config.maxPosts));
+        params.set("maxCommentsPerPost", String(config.maxCommentsPerPost));
+        params.set("maxTotalComments", String(config.maxTotalComments));
+        const url = params.toString() ? `/api/circle/posts?${params.toString()}` : "/api/circle/posts";
+        const res = await fetch(url, { cache: "no-store" });
         const json = (await res.json()) as SignageSnapshot;
         // Helpful for debugging what the API is returning in the browser console.
         console.groupCollapsed(
-          `[/api/circle/posts] ${new Date().toISOString()} status=${res.status} ok=${res.ok}`,
+          `[${url}] ${new Date().toISOString()} status=${res.status} ok=${res.ok}`,
         );
         console.log(json);
         console.groupEnd();
@@ -281,7 +247,7 @@ export default function SignageClient() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [config.spaceId]);
 
   async function toggleFullscreen() {
     try {
@@ -306,7 +272,7 @@ export default function SignageClient() {
     if (mainAdvanceTimer.current) window.clearTimeout(mainAdvanceTimer.current);
 
     const ms =
-      "kind" in activeMain && activeMain.kind !== "promo" && (activeMain as MediaSlide).media.type === "video"
+      "kind" in activeMain && activeMain.kind === "post" && (activeMain as PostSlide).media?.type === "video"
         ? VIDEO_MAX_MS
         : ADVANCE_MS;
 
@@ -331,14 +297,25 @@ export default function SignageClient() {
   }, [mainQueue]);
 
   useEffect(() => {
-    if (textAdvanceTimer.current) window.clearInterval(textAdvanceTimer.current);
-    textAdvanceTimer.current = window.setInterval(() => {
-      setActiveTextIdx((i) => (textOnlyComments.length ? (i + 1) % textOnlyComments.length : 0));
+    activePostIdRef.current = activePostId;
+    setBottomTick((t) => t + 1);
+  }, [activePostId]);
+
+  useEffect(() => {
+    if (bottomAdvanceTimer.current) window.clearInterval(bottomAdvanceTimer.current);
+    bottomAdvanceTimer.current = window.setInterval(() => {
+      const pid = activePostIdRef.current;
+      if (!pid) return;
+      const arr = commentsByPostId[String(pid)] ?? [];
+      if (arr.length === 0) return;
+      const curr = textIdxByPostIdRef.current.get(pid) ?? 0;
+      textIdxByPostIdRef.current.set(pid, (curr + 1) % arr.length);
+      setBottomTick((t) => t + 1);
     }, ADVANCE_MS);
     return () => {
-      if (textAdvanceTimer.current) window.clearInterval(textAdvanceTimer.current);
+      if (bottomAdvanceTimer.current) window.clearInterval(bottomAdvanceTimer.current);
     };
-  }, [textOnlyComments.length]);
+  }, [commentsByPostId]);
 
   return (
     <>
@@ -366,14 +343,22 @@ export default function SignageClient() {
             {"kind" in activeMain && activeMain.kind === "promo" ? (
               <PromoMain item={activeMain} />
             ) : (
-              <MediaMain item={activeMain as MediaSlide} />
+              <PostMain item={activeMain as PostSlide} />
             )}
           </motion.div>
         </AnimatePresence>
       </div>
 
       <div className="h-1/4 bg-[#1A1A1A] p-8 overflow-hidden">
-        <TextCommentTicker item={activeText} />
+        {"kind" in activeMain && activeMain.kind === "promo" ? (
+          <PromoTickerMessage message={PROMO_CTA} />
+        ) : activePostId && activeComment ? (
+          <TextCommentTicker item={activeComment} />
+        ) : activePostId ? (
+          <PromoTickerMessage message={EMPTY_POST_CTA} />
+        ) : (
+          <PromoTickerMessage message={PROMO_CTA} />
+        )}
       </div>
     </>
   );
@@ -451,7 +436,23 @@ function FullscreenIcon({ isFullscreen }: { isFullscreen: boolean }) {
   );
 }
 
-function MediaMain({ item }: { item: MediaSlide }) {
+function PostMain({ item }: { item: PostSlide }) {
+  if (!item.media) {
+    return (
+      <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black via-black to-[#1A1A1A]">
+        <div className="max-w-[80%] text-center">
+          <div className="flex items-center justify-center gap-5">
+            <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={72} />
+            <div className="text-3xl font-extrabold leading-tight text-white/95">{item.authorName}</div>
+          </div>
+          <div className="mt-8 text-[3.25rem] leading-tight font-extrabold text-white">
+            {item.caption || " "}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="absolute inset-0">
       {item.media.type === "image" ? (
@@ -480,33 +481,117 @@ function MediaMain({ item }: { item: MediaSlide }) {
         <>
           <div className="absolute inset-0 bg-gradient-to-br from-black via-black to-[#1A1A1A]" />
           <div className="absolute inset-0 flex items-center justify-center">
-            <video
-              src={item.media.url}
-              autoPlay
-              muted
-              loop
-              playsInline
-              className="h-full w-full object-contain"
-            />
+            <HlsVideo src={item.media.url} className="h-full w-full object-contain" />
           </div>
         </>
       )}
 
       <div className="absolute inset-0 bg-black/15" />
 
-      <div className="absolute left-10 right-10 bottom-10">
-        <div className="inline-block max-w-[70%] rounded-3xl bg-black/55 border border-white/15 px-8 py-6 backdrop-blur-md">
-          <div className="text-4xl font-extrabold">{item.authorName}</div>
-          <div className="mt-3 text-3xl font-semibold text-white/90 line-clamp-4">
-            {item.text || " "}
-          </div>
+      <div className="absolute right-10 bottom-10">
+        <div className="inline-flex items-center gap-5 rounded-3xl bg-black/55 border border-white/15 px-8 py-6 backdrop-blur-md">
+          <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={56} />
+          <div className="text-2xl font-extrabold leading-tight text-white">{item.authorName}</div>
         </div>
       </div>
     </div>
   );
 }
 
-function TextCommentTicker({ item }: { item: TextOnlyComment | null }) {
+function isLikelyHlsUrl(src: string): boolean {
+  const s = src.toLowerCase();
+  return s.includes(".m3u8") || s.includes("/hls/") || s.includes("application/x-mpegurl");
+}
+
+function preferNativeHlsPlayback(): boolean {
+  // Chrome may report it can play HLS via canPlayType("application/vnd.apple.mpegurl") === "maybe",
+  // but still fails with MediaError code=4. For signage on Windows Chrome we always prefer hls.js.
+  // Safari (macOS/iOS) can do native HLS reliably.
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  const isSafari =
+    /Safari\//.test(ua) &&
+    !/Chrome\//.test(ua) &&
+    !/Chromium\//.test(ua) &&
+    !/Edg\//.test(ua) &&
+    !/OPR\//.test(ua);
+  return isSafari;
+}
+
+function HlsVideo({ src, className }: { src: string; className?: string }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+
+    // Reset any prior state.
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+
+    const isHls = isLikelyHlsUrl(src);
+    const canPlayTypeResult =
+      isHls && typeof video.canPlayType === "function"
+        ? video.canPlayType("application/vnd.apple.mpegurl")
+        : "";
+    const nativeOk = isHls && preferNativeHlsPlayback() && canPlayTypeResult === "probably";
+    const hlsJsSupported = Hls.isSupported();
+
+    // For non-HLS, or for Safari where native HLS is reliable, use native playback.
+    if (!isHls || nativeOk) {
+      video.src = src;
+      // Autoplay can still be blocked in some environments; ignore errors.
+      video.play().catch(() => {});
+      return;
+    }
+
+    // For HLS on Chrome/Windows, prefer hls.js when supported.
+    if (!hlsJsSupported) {
+      // Last-resort fallback: some environments might still try playing.
+      video.src = src;
+      video.play().catch(() => {});
+      return;
+    }
+
+    const hls = new Hls({
+      enableWorker: true,
+      lowLatencyMode: false,
+    });
+
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+      hls.loadSource(src);
+    });
+
+    // Try to play as soon as we have enough to start.
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      video.play().catch(() => {});
+    });
+
+    return () => {
+      try {
+        hls.destroy();
+      } catch {
+        // ignore
+      }
+    };
+  }, [src]);
+
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      muted
+      loop
+      playsInline
+      preload="metadata"
+      className={className}
+    />
+  );
+}
+
+function TextCommentTicker({ item }: { item: LivePostComment | null }) {
   if (!item) {
     return (
       <div className="h-full flex items-center">
@@ -517,11 +602,70 @@ function TextCommentTicker({ item }: { item: TextOnlyComment | null }) {
 
   return (
     <div className="h-full flex items-center">
-      <div className="min-w-0">
+      <div className="min-w-0 w-full">
         <div className="text-3xl font-bold text-white/80">Latest comments</div>
-        <div className="mt-4 text-4xl font-extrabold">{item.authorName}</div>
-        <div className="mt-3 text-3xl font-semibold text-white/90 line-clamp-3">{item.text}</div>
+        <div className="mt-4 flex items-center gap-6 min-w-0">
+          <AvatarCircle name={item.authorName} src={item.authorAvatarUrl ?? null} size={64} />
+          <div className="min-w-0">
+            <div className="text-2xl font-extrabold leading-tight">{item.authorName}</div>
+            <div className="mt-2 text-[2.25rem] leading-tight font-semibold text-white/90 line-clamp-3">
+              {item.text || " "}
+            </div>
+          </div>
+        </div>
       </div>
+    </div>
+  );
+}
+
+function PromoTickerMessage({ message }: { message: string }) {
+  return (
+    <div className="h-full flex items-center">
+      <div className="text-4xl font-semibold text-white/75">{message}</div>
+    </div>
+  );
+}
+
+function initialsForName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0]?.[0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1]?.[0] ?? "" : "";
+  return (first + last).toUpperCase();
+}
+
+function hashToHue(input: string): number {
+  let h = 0;
+  for (let i = 0; i < input.length; i += 1) h = (h * 31 + input.charCodeAt(i)) >>> 0;
+  return h % 360;
+}
+
+function AvatarCircle({ name, src, size }: { name: string; src: string | null; size: number }) {
+  const initials = initialsForName(name);
+  const hue = hashToHue(name);
+  const bg = `hsl(${hue} 55% 35%)`;
+  const [imgFailed, setImgFailed] = useState(false);
+  const effectiveSrc = src && !imgFailed ? src : null;
+
+  return (
+    <div
+      className="shrink-0 rounded-full overflow-hidden border border-white/15"
+      style={{ width: size, height: size, background: bg }}
+      aria-label={`${name} avatar`}
+    >
+      {effectiveSrc ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={effectiveSrc}
+          alt=""
+          className="h-full w-full object-cover"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <div className="h-full w-full flex items-center justify-center text-white font-extrabold">
+          <span style={{ fontSize: Math.max(16, Math.floor(size * 0.38)) }}>{initials}</span>
+        </div>
+      )}
     </div>
   );
 }

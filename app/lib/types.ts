@@ -9,6 +9,7 @@ export type PromoSlide = {
 export type LivePostComment = {
   id: number;
   authorName: string;
+  authorAvatarUrl?: string | null;
   text: string;
   createdAt?: string;
   imageUrls?: string[];
@@ -46,6 +47,7 @@ export type SignageSnapshot = {
   posts: Array<{
     id: number;
     authorName: string;
+    authorAvatarUrl?: string | null;
     caption: string;
     imageUrl?: string | null;
     videoUrl?: string | null;
