@@ -1,4 +1,4 @@
-Circle AV Feed is a Next.js app that renders an event “signage” screen powered by the Circle Admin API:
+Circle AV Feed is a **Next.js digital signage feed** powered by the **Circle Admin API** (Circle community platform). It renders a full-screen “live feed” display for events: posts (text, image, video) in the main area with a rotating comments ticker.
 
 - **Main area**: rotates through **posts** (image, video, or text-only).
 - **Bottom bar**: shows **comments for the currently displayed post** (or a CTA when a promo slide is showing).
@@ -53,6 +53,11 @@ Circle videos are commonly delivered as **HLS (`.m3u8`)**.
 - **Safari**: uses native HLS when available.
 - Videos autoplay muted (no audio) and **do not loop**.
 - Video slides stay on-screen for the **video duration**, clamped by per-device config (see “Display timing” below).
+
+## Links
+
+- Circle Admin API docs: `https://api.circle.so/`
+- HLS playback (hls.js): `https://github.com/video-dev/hls.js`
 
 ## Signage caching + polling (Vercel)
 
