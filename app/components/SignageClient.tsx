@@ -183,7 +183,7 @@ export default function SignageClient() {
     if (typeof window === "undefined") return;
     if (mainQueue.length <= 1) return;
 
-    const toNextImageUrl = (src: string) => {
+    const toOptimizedImageUrl = (src: string) => {
       // Don't route data URLs through Next image optimization.
       if (/^data:/i.test(src)) return src;
       const params = new URLSearchParams();
@@ -197,22 +197,35 @@ export default function SignageClient() {
     for (let step = 1; step <= PREFETCH_AHEAD; step += 1) {
       const it = mainQueue[(activeMainIdx + step) % queueLen];
 
-      const urls: string[] = [];
+      const directUrls: string[] = [];
+      const optimizedUrls: string[] = [];
       if ("kind" in it && it.kind === "promo") {
-        if (it.imageSrc) urls.push(String(it.imageSrc));
+        // Promos are rendered via <img>, so prefetch directly (bypass optimizer).
+        if (it.imageSrc) directUrls.push(String(it.imageSrc));
       } else if ("kind" in it && it.kind === "post") {
         const media = (it as PostSlide).media;
-        if (media?.type === "image") urls.push(media.url);
-        if (media?.type === "video" && media.posterUrl) urls.push(String(media.posterUrl));
+        // Posts are rendered with next/image (for images) so warm the optimizer cache.
+        if (media?.type === "image") optimizedUrls.push(media.url);
+        // Posters are plain <img> in the video path, so prefetch directly.
+        if (media?.type === "video" && media.posterUrl) directUrls.push(String(media.posterUrl));
       }
 
-      for (const u of urls) {
+      for (const u of directUrls) {
         if (!u) continue;
         if (prefetchedRef.current.has(u)) continue;
         prefetchedRef.current.add(u);
         const img = new window.Image();
         img.decoding = "async";
-        img.src = toNextImageUrl(u);
+        img.src = u;
+      }
+
+      for (const u of optimizedUrls) {
+        if (!u) continue;
+        if (prefetchedRef.current.has(u)) continue;
+        prefetchedRef.current.add(u);
+        const img = new window.Image();
+        img.decoding = "async";
+        img.src = toOptimizedImageUrl(u);
       }
     }
   }, [mainQueue, activeMainIdx]);
