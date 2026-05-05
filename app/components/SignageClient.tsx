@@ -33,15 +33,28 @@ const EMPTY_POST_CTA = "Be the first to comment on this post";
 
 function buildMainQueue(promos: PromoSlide[], content: PostSlide[]): MainDisplayItem[] {
   if (content.length === 0) return promos;
+  if (promos.length === 0) return content;
 
-  // Target ~25% promos by inserting 1 promo after every 3 comment-image slides.
+  // For low-content situations, alternate post/promo so promos still appear.
+  if (content.length < 3) {
+    const out: MainDisplayItem[] = [];
+    let promoIdx = 0;
+    for (let i = 0; i < content.length; i += 1) {
+      out.push(content[i]);
+      out.push(promos[promoIdx % promos.length] as MainDisplayItem);
+      promoIdx += 1;
+    }
+    return out;
+  }
+
+  // Target ~25% promos by inserting 1 promo after every 3 posts.
   const promoEvery = 3;
   const out: MainDisplayItem[] = [];
   let promoIdx = 0;
 
   for (let i = 0; i < content.length; i += 1) {
     out.push(content[i]);
-    if (promos.length > 0 && (i + 1) % promoEvery === 0) {
+    if ((i + 1) % promoEvery === 0) {
       out.push(promos[promoIdx % promos.length] as MainDisplayItem);
       promoIdx += 1;
     }
