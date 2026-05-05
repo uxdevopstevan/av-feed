@@ -45,6 +45,19 @@ Relevant files:
 - Media attached to **comments** is ignored for the main area.
 - Text-only posts render centered on a dark background.
 
+### Promo slides
+
+Promo slides are configured per-device on `/config` (stored in localStorage).
+
+Rotation behavior:
+
+- If there are **0 posts**: promos rotate continuously.
+- If there are **1–2 posts**: promos alternate with posts while cycling through *all* promo images:
+  - 1 post: `post, promo1, post, promo2, post, promo3, ...`
+  - 2 posts: `post1, promo1, post2, promo2, post1, promo3, ...`
+- If there are **3+ posts**: promos are inserted after every 3 posts (targeting ~25% promos):
+  - `post1, post2, post3, promo1, post4, post5, post6, promo2, ...`
+
 ### Video playback
 
 Circle videos are commonly delivered as **HLS (`.m3u8`)**.
@@ -100,10 +113,16 @@ The config page (`/config`) also controls display timing stored per-device in lo
 - `commentAdvanceMs`: how often the bottom-bar comment rotates.
 - `postMinMs`: minimum time a text/image post stays on-screen.
 - `postMaxMs`: maximum time a text/image post stays on-screen.
+- `promoSlideMs`: how long a promo slide stays on-screen (default 8 seconds).
 - `videoMinMs`: minimum time a video post stays on-screen.
 - `videoMaxMs`: maximum time a video post stays on-screen.
 
 Text/image post duration can extend to cycle through comments (up to `maxCommentsPerPost`) at `commentAdvanceMs`, capped by `postMaxMs`.
+
+## Media loading notes (slow connections)
+
+- Post images use Next.js image optimization on Vercel (remote domains are allowlisted in `next.config.ts`).
+- The client prefetches upcoming slide images (posts, promos, and video posters) to reduce the chance of fading to a slide before its media has started downloading.
 
 ### What to verify on Vercel
 
