@@ -10,6 +10,9 @@ import type { LivePostComment, PromoSlide, SignageSnapshot } from "@/app/lib/typ
 const POLL_MS = 60_000;
 const ADVANCE_MS = 10_000;
 const SNAPSHOT_TTL_MS = 6 * 60 * 60 * 1000;
+const PREFETCH_AHEAD = 3;
+const PREFETCH_IMAGE_WIDTH = 2560;
+const PREFETCH_IMAGE_QUALITY = 75;
 
 const LS_DAY_KEY = "circle:dayKey";
 const lsSnapshotKey = (dayKey: string) => `circle:snapshot:${dayKey}`;
@@ -78,6 +81,7 @@ export default function SignageClient() {
   const videoDurationMsByUrlRef = useRef(new Map<string, number>());
   const [videoDurationTick, setVideoDurationTick] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const prefetchedRef = useRef(new Set<string>());
   const contentIdsRef = useRef<string[]>([]);
   const contentByIdRef = useRef(new Map<string, PostSlide>());
   const lastActiveKeyRef = useRef<string | null>(null);
@@ -174,6 +178,42 @@ export default function SignageClient() {
   const activeCommentIdx = activePostId ? (textIdxByPostIdRef.current.get(activePostId) ?? 0) : 0;
   const activeComment =
     activePostId && activeComments.length ? activeComments[activeCommentIdx % activeComments.length] : null;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (mainQueue.length <= 1) return;
+
+    const toNextImageUrl = (src: string) => {
+      const params = new URLSearchParams();
+      params.set("url", src);
+      params.set("w", String(PREFETCH_IMAGE_WIDTH));
+      params.set("q", String(PREFETCH_IMAGE_QUALITY));
+      return `/_next/image?${params.toString()}`;
+    };
+
+    const queueLen = mainQueue.length;
+    for (let step = 1; step <= PREFETCH_AHEAD; step += 1) {
+      const it = mainQueue[(activeMainIdx + step) % queueLen];
+
+      const urls: string[] = [];
+      if ("kind" in it && it.kind === "promo") {
+        if (it.imageSrc) urls.push(String(it.imageSrc));
+      } else if ("kind" in it && it.kind === "post") {
+        const media = (it as PostSlide).media;
+        if (media?.type === "image") urls.push(media.url);
+        if (media?.type === "video" && media.posterUrl) urls.push(String(media.posterUrl));
+      }
+
+      for (const u of urls) {
+        if (!u) continue;
+        if (prefetchedRef.current.has(u)) continue;
+        prefetchedRef.current.add(u);
+        const img = new window.Image();
+        img.decoding = "async";
+        img.src = toNextImageUrl(u);
+      }
+    }
+  }, [mainQueue, activeMainIdx]);
 
   useEffect(() => {
     const update = () => setIsFullscreen(Boolean(document.fullscreenElement));
@@ -588,7 +628,7 @@ function PostMain({
               src={media.url}
               alt="Live media background"
               fill
-              unoptimized
+              sizes="75vw"
               className="object-cover"
             />
           </div>
@@ -597,7 +637,7 @@ function PostMain({
               src={media.url}
               alt="Live media"
               fill
-              unoptimized
+              sizes="75vw"
               className="object-contain"
               priority
             />
