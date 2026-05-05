@@ -184,6 +184,8 @@ export default function SignageClient() {
     if (mainQueue.length <= 1) return;
 
     const toNextImageUrl = (src: string) => {
+      // Don't route data URLs through Next image optimization.
+      if (/^data:/i.test(src)) return src;
       const params = new URLSearchParams();
       params.set("url", src);
       params.set("w", String(PREFETCH_IMAGE_WIDTH));

@@ -11,6 +11,7 @@ const nextConfig: NextConfig = {
       { protocol: "https", hostname: "cdn.circle.so" },
       { protocol: "https", hostname: "*.cloudfront.net" },
       { protocol: "https", hostname: "*.amazonaws.com" },
+      { protocol: "https", hostname: "*.blob.core.windows.net" },
     ],
   },
 };
