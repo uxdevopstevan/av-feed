@@ -38,11 +38,9 @@ function buildMainQueue(promos: PromoSlide[], content: PostSlide[]): MainDisplay
   // For low-content situations, alternate post/promo so promos still appear.
   if (content.length < 3) {
     const out: MainDisplayItem[] = [];
-    let promoIdx = 0;
-    for (let i = 0; i < content.length; i += 1) {
-      out.push(content[i]);
-      out.push(promos[promoIdx % promos.length] as MainDisplayItem);
-      promoIdx += 1;
+    for (let promoIdx = 0; promoIdx < promos.length; promoIdx += 1) {
+      out.push(content[promoIdx % content.length] as MainDisplayItem);
+      out.push(promos[promoIdx] as MainDisplayItem);
     }
     return out;
   }
@@ -295,7 +293,9 @@ export default function SignageClient() {
 
     let ms = config.postMinMs;
 
-    if ("kind" in activeMain && activeMain.kind === "post") {
+    if ("kind" in activeMain && activeMain.kind === "promo") {
+      ms = Math.max(0, config.promoSlideMs);
+    } else if ("kind" in activeMain && activeMain.kind === "post") {
       const media = (activeMain as PostSlide).media;
       if (media?.type === "video") {
         const known = videoDurationMsByUrlRef.current.get(media.url);

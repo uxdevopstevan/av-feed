@@ -7,6 +7,7 @@ export type SignageConfig = {
   commentAdvanceMs: number;
   postMinMs: number;
   postMaxMs: number;
+  promoSlideMs: number;
   videoMinMs: number;
   videoMaxMs: number;
   themeColor: string;
@@ -32,6 +33,7 @@ export const DEFAULT_SIGNAGE_CONFIG: SignageConfig = {
   commentAdvanceMs: 4000,
   postMinMs: 10_000,
   postMaxMs: 40_000,
+  promoSlideMs: 8_000,
   videoMinMs: 10_000,
   videoMaxMs: 60_000,
   themeColor: "#701a56",
@@ -123,6 +125,8 @@ export function sanitizeSignageConfig(input: unknown): SignageConfig {
   const postMinMs = normalizeNonNegativeInt(obj.postMinMs) ?? DEFAULT_SIGNAGE_CONFIG.postMinMs;
   const postMaxMsRaw = normalizeNonNegativeInt(obj.postMaxMs) ?? DEFAULT_SIGNAGE_CONFIG.postMaxMs;
   const postMaxMs = Math.max(postMinMs, postMaxMsRaw);
+  const promoSlideMs =
+    normalizeNonNegativeInt(obj.promoSlideMs) ?? DEFAULT_SIGNAGE_CONFIG.promoSlideMs;
   const videoMinMs = normalizeNonNegativeInt(obj.videoMinMs) ?? DEFAULT_SIGNAGE_CONFIG.videoMinMs;
   const videoMaxMsRaw = normalizeNonNegativeInt(obj.videoMaxMs) ?? DEFAULT_SIGNAGE_CONFIG.videoMaxMs;
   const videoMaxMs = Math.max(videoMinMs, videoMaxMsRaw);
@@ -136,6 +140,7 @@ export function sanitizeSignageConfig(input: unknown): SignageConfig {
     commentAdvanceMs,
     postMinMs,
     postMaxMs,
+    promoSlideMs,
     videoMinMs,
     videoMaxMs,
     themeColor: normalizeHexColor(obj.themeColor) ?? DEFAULT_SIGNAGE_CONFIG.themeColor,

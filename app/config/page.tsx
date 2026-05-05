@@ -386,6 +386,22 @@ export default function ConfigPage() {
                     className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
                   />
 
+                  <label className="mt-4 block text-base font-bold text-white/80">
+                    Promo slide duration (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={120}
+                    step={1}
+                    value={Math.max(1, Math.round((draft.promoSlideMs ?? 0) / 1000))}
+                    onChange={(e) => {
+                      const seconds = Number(e.target.value);
+                      setDraft((d) => ({ ...d, promoSlideMs: Math.max(0, Math.floor(seconds * 1000)) }));
+                    }}
+                    className="mt-3 w-full rounded-xl bg-white/10 border border-white/20 px-4 py-3 text-base outline-none focus:border-white/40 font-mono"
+                  />
+
                   <label className="mt-4 block text-base font-bold text-white/80">Video minimum (seconds)</label>
                   <input
                     type="number"
